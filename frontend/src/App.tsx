@@ -1,17 +1,9 @@
+
 import { useEffect, useState } from "react";
 import {
-  Search,
-  Gift,
-  Gem,
-  Star,
-  User,
-  ShoppingBag,
-  ChevronRight,
-  ArrowLeft,
-  Clock,
-  ShieldCheck,
-  Headphones,
-  Crown,
+  Search, Gift, Gem, Star, User, ShoppingBag,
+  ChevronRight, ArrowLeft, ShieldCheck,
+  Headphones, Crown, RefreshCw
 } from "lucide-react";
 
 declare global {
@@ -19,13 +11,16 @@ declare global {
     Telegram?: {
       WebApp: {
         initData: string;
+        ready: () => void;
+        expand: () => void;
         openTelegramLink: (url: string) => void;
       };
     };
   }
 }
 
-const API = import.meta.env.VITE_API_URL || "";
+const API = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+const SUPPORT_USERNAME = "PrestigeMarketSupport";
 
 type Listing = {
   id: number;
@@ -47,29 +42,6 @@ const categories = [
   { id: "numbers", label: "Номера", icon: Star },
 ];
 
-const demoItems: Listing[] = [
-  {
-    id: 1,
-    category: "gifts",
-    title: "Коллекционный подарок",
-    description: "Telegram NFT Gift",
-    image_url: null,
-    price_per_day: 50,
-    min_days: 1,
-    max_days: 30,
-  },
-  {
-    id: 2,
-    category: "gifts",
-    title: "Редкий NFT-подарок",
-    description: "Коллекционная серия",
-    image_url: null,
-    price_per_day: 75,
-    min_days: 1,
-    max_days: 14,
-  },
-];
-
 function App() {
   const [tab, setTab] = useState<Tab>("market");
   const [category, setCategory] = useState("all");
@@ -80,6 +52,8 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [orders, setOrders] = useState<any[]>([]);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [ordersLoading, setOrdersLoading] = useState(false);
 
   const initData = window.Telegram?.WebApp?.initData || "";
 
@@ -89,11 +63,17 @@ function App() {
   };
 
   useEffect(() => {
+    window.Telegram?.WebApp?.ready();
+    window.Telegram?.WebApp?.expand();
+  }, []);
+
+  useEffect(() => {
     loadListings();
   }, [category]);
 
   async function loadListings() {
     setLoading(true);
+    setError("");
 
     try {
       const params = new URLSearchParams();
@@ -110,36 +90,52 @@ function App() {
         `${API}/api/listings?${params.toString()}`
       );
 
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        throw new Error("Не удалось загрузить каталог");
+      }
 
       const data = await response.json();
-      setItems(data.items || []);
+      setItems(Array.isArray(data.items) ? data.items : []);
     } catch {
-      setItems(demoItems.filter((item) =>
-        category === "all" || item.category === category
-      ));
+      setItems([]);
+      setError("Каталог временно недоступен. Попробуйте обновить страницу.");
     } finally {
       setLoading(false);
     }
   }
 
   async function loadOrders() {
-    try {
-      const response = await fetch(`${API}/api/orders`, {
-        headers,
-      });
+    if (!initData) {
+      setOrders([]);
+      setMessage("Откройте приложение через Telegram, чтобы увидеть заказы.");
+      return;
+    }
 
-      if (!response.ok) throw new Error();
+    setOrdersLoading(true);
+
+    try {
+      const response = await fetch(`${API}/api/orders`, { headers });
+
+      if (!response.ok) {
+        throw new Error("Не удалось загрузить заказы");
+      }
 
       const data = await response.json();
-      setOrders(data.items || []);
+      setOrders(Array.isArray(data.items) ? data.items : []);
     } catch {
-      setOrders([]);
+      setMessage("Не удалось загрузить историю заказов.");
+    } finally {
+      setOrdersLoading(false);
     }
   }
 
   async function createRental() {
     if (!selected) return;
+
+    if (!initData) {
+      setMessage("Откройте приложение через Telegram, чтобы оформить заявку.");
+      return;
+    }
 
     try {
       const response = await fetch(`${API}/api/rentals`, {
@@ -157,18 +153,21 @@ function App() {
         throw new Error(data.detail || "Не удалось создать заявку");
       }
 
-      setMessage(`Заявка №${data.order.id} создана`);
+      setMessage(`Заявка №${data.order.id} создана. Ожидайте подтверждения.`);
       setSelected(null);
     } catch (error) {
       setMessage(
-        error instanceof Error
-          ? error.message
-          : "Ошибка создания заявки"
+        error instanceof Error ? error.message : "Ошибка создания заявки"
       );
     }
   }
 
   async function createDigitalOrder(kind: string) {
+    if (!initData) {
+      setMessage("Откройте приложение через Telegram, чтобы оформить заказ.");
+      return;
+    }
+
     try {
       const response = await fetch(`${API}/api/orders`, {
         method: "POST",
@@ -186,18 +185,26 @@ function App() {
         throw new Error(data.detail || "Ошибка создания заказа");
       }
 
-      setMessage(`Заявка №${data.order.id} создана`);
-    } catch {
-      setMessage("Не удалось создать заявку. Попробуйте позже.");
+      setMessage(
+        `Заявка №${data.order.id} создана. Это ещё не оплата — дождитесь дальнейших инструкций.`
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Не удалось создать заявку."
+      );
     }
   }
 
   function openSupport() {
-    const username = "PrestigeMarketSupport";
-
     window.Telegram?.WebApp?.openTelegramLink(
-      `https://t.me/${username}`
+      `https://t.me/${SUPPORT_USERNAME}`
     );
+
+    if (!window.Telegram?.WebApp) {
+      window.open(`https://t.me/${SUPPORT_USERNAME}`, "_blank");
+    }
   }
 
   const filteredItems = items.filter((item) =>
@@ -222,10 +229,7 @@ function App() {
 
       {selected ? (
         <main className="content">
-          <button
-            className="back-button"
-            onClick={() => setSelected(null)}
-          >
+          <button className="back-button" onClick={() => setSelected(null)}>
             <ArrowLeft size={17} /> Назад в каталог
           </button>
 
@@ -251,17 +255,13 @@ function App() {
               <span>Срок аренды</span>
               <div className="counter">
                 <button
-                  onClick={() =>
-                    setDays(Math.max(selected.min_days, days - 1))
-                  }
+                  onClick={() => setDays(Math.max(selected.min_days, days - 1))}
                 >
                   −
                 </button>
                 <strong>{days} дн.</strong>
                 <button
-                  onClick={() =>
-                    setDays(Math.min(selected.max_days, days + 1))
-                  }
+                  onClick={() => setDays(Math.min(selected.max_days, days + 1))}
                 >
                   +
                 </button>
@@ -274,12 +274,11 @@ function App() {
             </div>
 
             <button className="primary-button" onClick={createRental}>
-              Оставить заявку
-              <ChevronRight size={18} />
+              Оставить заявку <ChevronRight size={18} />
             </button>
 
             <p className="small-note">
-              Заявка отправляется менеджеру для подтверждения.
+              Заявка отправляется на подтверждение. Оплата здесь пока не производится.
             </p>
           </div>
         </main>
@@ -297,8 +296,7 @@ function App() {
                       <span>цифровой роскоши</span>
                     </h1>
                     <p>
-                      Коллекционные подарки, аренда NFT
-                      и цифровые услуги.
+                      Коллекционные подарки, аренда NFT и цифровые услуги.
                     </p>
                     <button
                       className="hero-button"
@@ -325,15 +323,10 @@ function App() {
                 <div className="category-list">
                   {categories.map((item) => {
                     const Icon = item.icon;
-
                     return (
                       <button
                         key={item.id}
-                        className={
-                          category === item.id
-                            ? "category active"
-                            : "category"
-                        }
+                        className={category === item.id ? "category active" : "category"}
                         onClick={() => {
                           setCategory(item.id);
                           setTab("nft");
@@ -351,38 +344,50 @@ function App() {
                     <span className="eyebrow">HANDPICKED</span>
                     <h2>Популярное</h2>
                   </div>
-                  <button
-                    className="text-button"
-                    onClick={() => setTab("nft")}
-                  >
+                  <button className="text-button" onClick={() => setTab("nft")}>
                     Все товары <ChevronRight size={15} />
                   </button>
                 </div>
 
-                <div className="product-grid">
-                  {items.slice(0, 2).map((item) => (
-                    <ProductCard
-                      key={item.id}
-                      item={item}
-                      onClick={() => {
-                        setSelected(item);
-                        setDays(item.min_days);
-                      }}
-                    />
-                  ))}
-                </div>
+                {loading ? (
+                  <div className="empty-state">Загрузка каталога...</div>
+                ) : (
+                  <div className="product-grid">
+                    {items.slice(0, 2).map((item) => (
+                      <ProductCard
+                        key={item.id}
+                        item={item}
+                        onClick={() => {
+                          setSelected(item);
+                          setDays(item.min_days);
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {!loading && items.length === 0 && (
+                  <div className="empty-state">
+                    <Gift size={36} />
+                    <strong>{error ? "Каталог недоступен" : "Пока нет объявлений"}</strong>
+                    <span>{error || "Новые предложения появятся здесь."}</span>
+                    <button className="text-button" onClick={loadListings}>
+                      <RefreshCw size={15} /> Обновить
+                    </button>
+                  </div>
+                )}
 
                 <section className="service-grid">
                   <button onClick={() => createDigitalOrder("stars")}>
                     <Star size={23} />
                     <strong>Telegram Stars</strong>
-                    <span>Оставить заказ</span>
+                    <span>Оставить заявку</span>
                   </button>
 
                   <button onClick={() => createDigitalOrder("premium")}>
                     <Gem size={23} />
                     <strong>Telegram Premium</strong>
-                    <span>Оставить заказ</span>
+                    <span>Оставить заявку</span>
                   </button>
                 </section>
               </>
@@ -414,11 +419,7 @@ function App() {
                   {categories.map((item) => (
                     <button
                       key={item.id}
-                      className={
-                        category === item.id
-                          ? "category active"
-                          : "category"
-                      }
+                      className={category === item.id ? "category active" : "category"}
                       onClick={() => setCategory(item.id)}
                     >
                       {item.label}
@@ -431,8 +432,11 @@ function App() {
                 ) : filteredItems.length === 0 ? (
                   <div className="empty-state">
                     <Gift size={36} />
-                    <strong>Пока нет объявлений</strong>
-                    <span>Новые предложения появятся здесь.</span>
+                    <strong>{error ? "Каталог недоступен" : "Пока нет объявлений"}</strong>
+                    <span>{error || "Новые предложения появятся здесь."}</span>
+                    <button className="text-button" onClick={loadListings}>
+                      <RefreshCw size={15} /> Обновить
+                    </button>
                   </div>
                 ) : (
                   <div className="product-grid">
@@ -449,17 +453,11 @@ function App() {
                   </div>
                 )}
 
-                <button
-                  className="secondary-button"
-                  onClick={() => createDigitalOrder("stars")}
-                >
+                <button className="secondary-button" onClick={() => createDigitalOrder("stars")}>
                   ⭐ Заказать Telegram Stars
                 </button>
 
-                <button
-                  className="secondary-button"
-                  onClick={() => createDigitalOrder("premium")}
-                >
+                <button className="secondary-button" onClick={() => createDigitalOrder("premium")}>
                   💎 Заказать Premium
                 </button>
               </>
@@ -486,10 +484,7 @@ function App() {
                 </div>
 
                 <div className="profile-menu">
-                  <button onClick={() => {
-                    loadOrders();
-                    setMessage("История заказов обновлена");
-                  }}>
+                  <button onClick={loadOrders}>
                     <ShoppingBag size={19} />
                     Мои заказы
                     <ChevronRight size={17} />
@@ -501,7 +496,7 @@ function App() {
                     <ChevronRight size={17} />
                   </button>
 
-                  <button onClick={() => setMessage("Раздел правил скоро появится")}>
+                  <button onClick={() => setMessage("Правила сервиса будут опубликованы отдельно.")}>
                     <ShieldCheck size={19} />
                     Правила сервиса
                     <ChevronRight size={17} />
@@ -510,7 +505,9 @@ function App() {
 
                 <div className="orders-list">
                   <h3>История заказов</h3>
-                  {orders.length === 0 ? (
+                  {ordersLoading ? (
+                    <p>Загрузка заказов...</p>
+                  ) : orders.length === 0 ? (
                     <p>Заказов пока нет.</p>
                   ) : (
                     orders.map((order) => (
@@ -597,5 +594,3 @@ function ProductCard({
     </button>
   );
 }
-
-export default App;
