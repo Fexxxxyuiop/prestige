@@ -1,6 +1,7 @@
 import secrets
 from decimal import Decimal
-from urllib.parse import urlparsefrom fastapi import FastAPI, Depends, HTTPException, Query
+from urllib.parse import urlparse
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, func
