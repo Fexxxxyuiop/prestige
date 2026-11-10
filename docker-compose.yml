@@ -1,0 +1,28 @@
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////app/data/prestige.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - prestige-data:/app/data
+
+  bot:
+    build: .
+    restart: unless-stopped
+    command: python -m backend.bot
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////app/data/prestige.db
+    volumes:
+      - prestige-data:/app/data
+    depends_on:
+      - api
+
+volumes:
+  prestige-data:
