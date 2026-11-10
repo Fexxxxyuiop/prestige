@@ -158,6 +158,7 @@ async def profile(
         "username": user.username,
         "first_name": user.first_name,
         "orders_count": result.scalar_one(),
+        "is_admin": telegram_user["id"] in settings.admins,
         "support": settings.SUPPORT_USERNAME,
     }
 
