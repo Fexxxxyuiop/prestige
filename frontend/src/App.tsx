@@ -60,7 +60,14 @@ const [myListingsLoading, setMyListingsLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [ordersLoading, setOrdersLoading] = useState(false);
-
+  const [isAdmin, setIsAdmin] = useState(false);
+const [adminOpen, setAdminOpen] = useState(false);
+const [adminTitle, setAdminTitle] = useState("");
+const [adminDescription, setAdminDescription] = useState("");
+const [adminImage, setAdminImage] = useState("");
+const [adminPrice, setAdminPrice] = useState("1");
+const [adminCategory, setAdminCategory] = useState("gifts");
+const [adminSaving, setAdminSaving] = useState(false);
   const initData = window.Telegram?.WebApp?.initData || "";
 
   const headers = {
@@ -74,8 +81,29 @@ const [myListingsLoading, setMyListingsLoading] = useState(false);
   }, []);
 
   useEffect(() => {
-    loadListings();
-  }, [category]);
+  loadListings();
+
+  async function checkAdmin() {
+    if (!initData) return;
+
+    try {
+      const response = await fetch(`${API}/api/me`, {
+        headers: {
+          "X-Telegram-Init-Data": initData,
+        },
+      });
+
+      if (!response.ok) return;
+
+      const data = await response.json();
+      setIsAdmin(data.is_admin === true);
+    } catch (error) {
+      console.error("Admin check failed:", error);
+    }
+  }
+
+  checkAdmin();
+}, [category]);
 
   async function loadListings() {
     setLoading(true);
