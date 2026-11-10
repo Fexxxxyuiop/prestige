@@ -50,6 +50,18 @@ class ListingCreate(BaseModel):
     min_days: int = Field(default=1, ge=1, le=365)
     max_days: int = Field(default=30, ge=1, le=365)
 
+    @field_validator("image_url", "external_url")
+    @classmethod
+    def check_urls(cls, value):
+        if value is None or value == "":
+            return value
+
+        parsed = urlparse(value)
+
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("Разрешены только HTTPS-ссылки")
+
+        return value
 
 class RentalCreate(BaseModel):
     listing_id: int
