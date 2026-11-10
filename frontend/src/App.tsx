@@ -262,7 +262,55 @@ async function loadMyListings() {
       window.open(`https://t.me/${SUPPORT_USERNAME}`, "_blank");
     }
   }
+async function addAdminListing() {
+  if (!initData || !isAdmin) {
+    setMessage("Нет доступа администратора.");
+    return;
+  }
 
+  if (!adminTitle.trim() || !adminPrice.trim()) {
+    setMessage("Заполни название и цену.");
+    return;
+  }
+
+  setAdminSaving(true);
+
+  try {
+    const response = await fetch(`${API}/api/admin/listings`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        category: adminCategory,
+        title: adminTitle,
+        description: adminDescription,
+        image_url: adminImage || null,
+        external_url: null,
+        price_per_day: Number(adminPrice),
+        min_days: 1,
+        max_days: 30,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || "Ошибка добавления NFT");
+    }
+
+    setAdminTitle("");
+    setAdminDescription("");
+    setAdminImage("");
+    setAdminPrice("1");
+    setMessage("NFT добавлен в каталог!");
+    await loadListings();
+  } catch (error) {
+    setMessage(
+      error instanceof Error ? error.message : "Ошибка добавления"
+    );
+  } finally {
+    setAdminSaving(false);
+  }
+}
   const filteredItems = items.filter((item) =>
     item.title.toLowerCase().includes(search.toLowerCase())
   );
