@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./style.css";
 
-const telegram = window.Telegram?.WebApp;
+const telegram = (window as any).Telegram?.WebApp;
 
 if (telegram) {
   telegram.ready();
