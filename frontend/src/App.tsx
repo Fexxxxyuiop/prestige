@@ -35,6 +35,10 @@ type Listing = {
 
 type Tab = "market" | "nft" | "profile";
 
+type MyListing = Listing & {
+  status: string;
+};
+
 const categories = [
   { id: "all", label: "Все", icon: ShoppingBag },
   { id: "gifts", label: "NFT Gifts", icon: Gift },
@@ -51,6 +55,8 @@ function App() {
   const [days, setDays] = useState(1);
   const [loading, setLoading] = useState(false);
   const [orders, setOrders] = useState<any[]>([]);
+  const [myListings, setMyListings] = useState<MyListing[]>([]);
+const [myListingsLoading, setMyListingsLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [ordersLoading, setOrdersLoading] = useState(false);
@@ -161,7 +167,29 @@ function App() {
       );
     }
   }
+async function loadMyListings() {
+  if (!initData) {
+    setMessage("Откройте приложение через Telegram.");
+    return;
+  }
 
+  setMyListingsLoading(true);
+
+  try {
+    const response = await fetch(`${API}/api/my-listings`, { headers });
+
+    if (!response.ok) {
+      throw new Error("Не удалось загрузить объявления");
+    }
+
+    const data = await response.json();
+    setMyListings(Array.isArray(data.items) ? data.items : []);
+  } catch {
+    setMessage("Не удалось загрузить ваши объявления.");
+  } finally {
+    setMyListingsLoading(false);
+  }
+}
   async function createDigitalOrder(kind: string) {
     if (!initData) {
       setMessage("Откройте приложение через Telegram, чтобы оформить заказ.");
@@ -489,7 +517,12 @@ function App() {
                     Мои заказы
                     <ChevronRight size={17} />
                   </button>
-
+                  
+<button onClick={loadMyListings}>
+  <Gift size={19} />
+  Мои объявления
+  <ChevronRight size={17} />
+</button>
                   <button onClick={openSupport}>
                     <Headphones size={19} />
                     Поддержка
