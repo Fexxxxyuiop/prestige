@@ -510,3 +510,97 @@ async def reject_listing(
     await session.commit()
 
     return {"ok": True, "status": item.status.value}
+class ListingUpdate(BaseModel):
+    category: str | None = None
+    title: str | None = None
+    description: str | None = None
+    image_url: str | None = None
+    price_per_day: Decimal | None = Field(default=None, gt=0)
+    min_days: int | None = Field(default=None, ge=1, le=365)
+    max_days: int | None = Field(default=None, ge=1, le=365)
+    available: bool | None = None
+
+
+def require_admin(telegram_user: dict):
+    if telegram_user["id"] not in settings.admins:
+        raise HTTPException(403, "Admin access required")
+
+
+@app.post("/api/admin/listings")
+async def admin_create_listing(
+    data: ListingCreate,
+    telegram_user: dict = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    require_admin(telegram_user)
+
+    if data.max_days < data.min_days:
+        raise HTTPException(400, "Invalid rental period")
+
+    item = Listing(
+        category=data.category,
+        title=data.title,
+        description=data.description,
+        image_url=data.image_url,
+        external_url=data.external_url,
+        price_per_day=data.price_per_day,
+        min_days=data.min_days,
+        max_days=data.max_days,
+        owner_telegram_id=telegram_user["id"],
+        status=ListingStatus.APPROVED,
+        available=True,
+    )
+
+    session.add(item)
+    await session.commit()
+    await session.refresh(item)
+
+    return {"ok": True, "item": listing_to_dict(item)}
+
+
+@app.patch("/api/admin/listings/{listing_id}")
+async def admin_update_listing(
+    listing_id: int,
+    data: ListingUpdate,
+    telegram_user: dict = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    require_admin(telegram_user)
+
+    item = await session.get(Listing, listing_id)
+
+    if not item:
+        raise HTTPException(404, "Gift not found")
+
+    updates = data.model_dump(exclude_unset=True)
+
+    for key, value in updates.items():
+        setattr(item, key, value)
+
+    if item.max_days < item.min_days:
+        raise HTTPException(400, "Invalid rental period")
+
+    await session.commit()
+
+    return {"ok": True, "item": listing_to_dict(item)}
+
+
+@app.delete("/api/admin/listings/{listing_id}")
+async def admin_delete_listing(
+    listing_id: int,
+    telegram_user: dict = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    require_admin(telegram_user)
+
+    item = await session.get(Listing, listing_id)
+
+    if not item:
+        raise HTTPException(404, "Gift not found")
+
+    item.available = False
+    item.status = ListingStatus.REJECTED
+
+    await session.commit()
+
+    return {"ok": True, "message": "Gift removed from catalog"}
