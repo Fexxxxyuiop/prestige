@@ -315,365 +315,458 @@ async function addAdminListing() {
     item.title.toLowerCase().includes(search.toLowerCase())
   );
 
-  return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <div className="brand-logo">P</div>
+ return (
+  <div className="app">
+    <header className="topbar">
+      <div className="brand">
+        <div className="brand-logo">P</div>
+        <div>
+          <div className="brand-name">PRESTIGE</div>
+          <div className="brand-sub">DIGITAL MARKETPLACE</div>
+        </div>
+      </div>
+
+      <button className="icon-button" onClick={openSupport}>
+        <Headphones size={19} />
+      </button>
+    </header>
+
+    {isAdmin && (
+      <div className="content">
+        <button
+          className="secondary-button"
+          onClick={() => {
+            setAdminOpen(!adminOpen);
+            setSelected(null);
+          }}
+        >
+          <ShieldCheck size={18} />
+          {adminOpen ? "Закрыть админ-панель" : "Админ-панель"}
+        </button>
+      </div>
+    )}
+
+    {adminOpen && isAdmin ? (
+      <main className="content">
+        <div className="section-heading">
           <div>
-            <div className="brand-name">PRESTIGE</div>
-            <div className="brand-sub">DIGITAL MARKETPLACE</div>
+            <span className="eyebrow">CONTROL CENTER</span>
+            <h2>Админ-панель</h2>
           </div>
+          <ShieldCheck size={25} />
         </div>
 
-        <button className="icon-button" onClick={openSupport}>
-          <Headphones size={19} />
-        </button>
-      </header>
+        <div className="detail-card">
+          <h3>Добавить NFT-подарок</h3>
 
-      {selected ? (
-        <main className="content">
-          <button className="back-button" onClick={() => setSelected(null)}>
-            <ArrowLeft size={17} /> Назад в каталог
+          <label>Название подарка</label>
+          <input
+            className="admin-input"
+            placeholder="Например: Precious Peach"
+            value={adminTitle}
+            onChange={(event) => setAdminTitle(event.target.value)}
+          />
+
+          <label>Описание</label>
+          <textarea
+            className="admin-input"
+            placeholder="Описание подарка..."
+            value={adminDescription}
+            onChange={(event) => setAdminDescription(event.target.value)}
+          />
+
+          <label>Ссылка на изображение</label>
+          <input
+            className="admin-input"
+            placeholder="https://..."
+            value={adminImage}
+            onChange={(event) => setAdminImage(event.target.value)}
+          />
+
+          <label>Цена аренды за день (Stars)</label>
+          <input
+            className="admin-input"
+            type="number"
+            min="1"
+            value={adminPrice}
+            onChange={(event) => setAdminPrice(event.target.value)}
+          />
+
+          <label>Категория</label>
+          <select
+            className="admin-input"
+            value={adminCategory}
+            onChange={(event) => setAdminCategory(event.target.value)}
+          >
+            <option value="gifts">NFT Gifts</option>
+            <option value="usernames">Юзернеймы</option>
+            <option value="numbers">Номера</option>
+          </select>
+
+          <button
+            className="primary-button"
+            disabled={adminSaving}
+            onClick={addAdminListing}
+          >
+            {adminSaving ? "Добавление..." : "Добавить в каталог"}
+            <ChevronRight size={18} />
+          </button>
+        </div>
+
+        <button
+          className="secondary-button"
+          onClick={() => {
+            setAdminOpen(false);
+            setTab("nft");
+            loadListings();
+          }}
+        >
+          <Gift size={18} />
+          Посмотреть каталог
+        </button>
+
+        {message && (
+          <div className="notice">
+            {message}
+            <button onClick={() => setMessage("")}>×</button>
+          </div>
+        )}
+      </main>
+    ) : selected ? (
+      <main className="content">
+        <button className="back-button" onClick={() => setSelected(null)}>
+          <ArrowLeft size={17} /> Назад в каталог
+        </button>
+
+        <div className="detail-image">
+          {selected.image_url ? (
+            <img src={selected.image_url} alt={selected.title} />
+          ) : (
+            <Gift size={65} />
+          )}
+        </div>
+
+        <div className="detail-card">
+          <span className="eyebrow">PRESTIGE COLLECTION</span>
+          <h1>{selected.title}</h1>
+          <p>{selected.description}</p>
+
+          <div className="price-line">
+            <span>Стоимость аренды</span>
+            <strong>{selected.price_per_day} ⭐ / день</strong>
+          </div>
+
+          <div className="days-selector">
+            <span>Срок аренды</span>
+            <div className="counter">
+              <button
+                onClick={() => setDays(Math.max(selected.min_days, days - 1))}
+              >
+                −
+              </button>
+              <strong>{days} дн.</strong>
+              <button
+                onClick={() => setDays(Math.min(selected.max_days, days + 1))}
+              >
+                +
+              </button>
+            </div>
+          </div>
+
+          <div className="total">
+            <span>Итого</span>
+            <strong>{selected.price_per_day * days} ⭐</strong>
+          </div>
+
+          <button className="primary-button" onClick={createRental}>
+            Оставить заявку <ChevronRight size={18} />
           </button>
 
-          <div className="detail-image">
-            {selected.image_url ? (
-              <img src={selected.image_url} alt={selected.title} />
-            ) : (
-              <Gift size={65} />
-            )}
-          </div>
+          <p className="small-note">
+            Заявка отправляется на подтверждение. Оплата здесь пока не производится.
+          </p>
+        </div>
+      </main>
+    ) : (
+      <>
+        <main className="content">
+          {tab === "market" && (
+            <>
+              <section className="hero">
+                <div className="hero-content">
+                  <span className="eyebrow">EXCLUSIVE DIGITAL GOODS</span>
+                  <h1>
+                    Твой мир
+                    <br />
+                    <span>цифровой роскоши</span>
+                  </h1>
+                  <p>
+                    Коллекционные подарки, аренда NFT и цифровые услуги.
+                  </p>
+                  <button className="hero-button" onClick={() => setTab("nft")}>
+                    Открыть каталог <ChevronRight size={17} />
+                  </button>
+                </div>
+                <div className="hero-decoration">
+                  <Crown size={76} strokeWidth={1} />
+                </div>
+              </section>
 
-          <div className="detail-card">
-            <span className="eyebrow">PRESTIGE COLLECTION</span>
-            <h1>{selected.title}</h1>
-            <p>{selected.description}</p>
-
-            <div className="price-line">
-              <span>Стоимость аренды</span>
-              <strong>{selected.price_per_day} ⭐ / день</strong>
-            </div>
-
-            <div className="days-selector">
-              <span>Срок аренды</span>
-              <div className="counter">
-                <button
-                  onClick={() => setDays(Math.max(selected.min_days, days - 1))}
-                >
-                  −
-                </button>
-                <strong>{days} дн.</strong>
-                <button
-                  onClick={() => setDays(Math.min(selected.max_days, days + 1))}
-                >
-                  +
-                </button>
+              <div className="section-heading">
+                <div>
+                  <span className="eyebrow">DISCOVER</span>
+                  <h2>Каталог</h2>
+                </div>
+                <span className="live-label">
+                  <span /> MARKET
+                </span>
               </div>
-            </div>
 
-            <div className="total">
-              <span>Итого</span>
-              <strong>{selected.price_per_day * days} ⭐</strong>
-            </div>
-
-            <button className="primary-button" onClick={createRental}>
-              Оставить заявку <ChevronRight size={18} />
-            </button>
-
-            <p className="small-note">
-              Заявка отправляется на подтверждение. Оплата здесь пока не производится.
-            </p>
-          </div>
-        </main>
-      ) : (
-        <>
-          <main className="content">
-            {tab === "market" && (
-              <>
-                <section className="hero">
-                  <div className="hero-content">
-                    <span className="eyebrow">EXCLUSIVE DIGITAL GOODS</span>
-                    <h1>
-                      Твой мир
-                      <br />
-                      <span>цифровой роскоши</span>
-                    </h1>
-                    <p>
-                      Коллекционные подарки, аренда NFT и цифровые услуги.
-                    </p>
-                    <button
-                      className="hero-button"
-                      onClick={() => setTab("nft")}
-                    >
-                      Открыть каталог <ChevronRight size={17} />
-                    </button>
-                  </div>
-                  <div className="hero-decoration">
-                    <Crown size={76} strokeWidth={1} />
-                  </div>
-                </section>
-
-                <div className="section-heading">
-                  <div>
-                    <span className="eyebrow">DISCOVER</span>
-                    <h2>Каталог</h2>
-                  </div>
-                  <span className="live-label">
-                    <span /> MARKET
-                  </span>
-                </div>
-
-                <div className="category-list">
-                  {categories.map((item) => {
-                    const Icon = item.icon;
-                    return (
-                      <button
-                        key={item.id}
-                        className={category === item.id ? "category active" : "category"}
-                        onClick={() => {
-                          setCategory(item.id);
-                          setTab("nft");
-                        }}
-                      >
-                        <Icon size={17} />
-                        {item.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="section-heading">
-                  <div>
-                    <span className="eyebrow">HANDPICKED</span>
-                    <h2>Популярное</h2>
-                  </div>
-                  <button className="text-button" onClick={() => setTab("nft")}>
-                    Все товары <ChevronRight size={15} />
-                  </button>
-                </div>
-
-                {loading ? (
-                  <div className="empty-state">Загрузка каталога...</div>
-                ) : (
-                  <div className="product-grid">
-                    {items.slice(0, 2).map((item) => (
-                      <ProductCard
-                        key={item.id}
-                        item={item}
-                        onClick={() => {
-                          setSelected(item);
-                          setDays(item.min_days);
-                        }}
-                      />
-                    ))}
-                  </div>
-                )}
-
-                {!loading && items.length === 0 && (
-                  <div className="empty-state">
-                    <Gift size={36} />
-                    <strong>{error ? "Каталог недоступен" : "Пока нет объявлений"}</strong>
-                    <span>{error || "Новые предложения появятся здесь."}</span>
-                    <button className="text-button" onClick={loadListings}>
-                      <RefreshCw size={15} /> Обновить
-                    </button>
-                  </div>
-                )}
-
-                <section className="service-grid">
-                  <button onClick={() => createDigitalOrder("stars")}>
-                    <Star size={23} />
-                    <strong>Telegram Stars</strong>
-                    <span>Оставить заявку</span>
-                  </button>
-
-                  <button onClick={() => createDigitalOrder("premium")}>
-                    <Gem size={23} />
-                    <strong>Telegram Premium</strong>
-                    <span>Оставить заявку</span>
-                  </button>
-                </section>
-              </>
-            )}
-
-            {tab === "nft" && (
-              <>
-                <div className="section-heading">
-                  <div>
-                    <span className="eyebrow">EXPLORE COLLECTIONS</span>
-                    <h2>Маркет</h2>
-                  </div>
-                </div>
-
-                <div className="search-box">
-                  <Search size={18} />
-                  <input
-                    placeholder="Поиск товаров..."
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") loadListings();
-                    }}
-                  />
-                  <button onClick={loadListings}>Найти</button>
-                </div>
-
-                <div className="category-list">
-                  {categories.map((item) => (
+              <div className="category-list">
+                {categories.map((item) => {
+                  const Icon = item.icon;
+                  return (
                     <button
                       key={item.id}
                       className={category === item.id ? "category active" : "category"}
-                      onClick={() => setCategory(item.id)}
+                      onClick={() => {
+                        setCategory(item.id);
+                        setTab("nft");
+                      }}
                     >
+                      <Icon size={17} />
                       {item.label}
                     </button>
+                  );
+                })}
+              </div>
+
+              <div className="section-heading">
+                <div>
+                  <span className="eyebrow">HANDPICKED</span>
+                  <h2>Популярное</h2>
+                </div>
+                <button className="text-button" onClick={() => setTab("nft")}>
+                  Все товары <ChevronRight size={15} />
+                </button>
+              </div>
+
+              {loading ? (
+                <div className="empty-state">Загрузка каталога...</div>
+              ) : (
+                <div className="product-grid">
+                  {items.slice(0, 2).map((item) => (
+                    <ProductCard
+                      key={item.id}
+                      item={item}
+                      onClick={() => {
+                        setSelected(item);
+                        setDays(item.min_days);
+                      }}
+                    />
                   ))}
                 </div>
+              )}
 
-                {loading ? (
-                  <div className="empty-state">Загрузка каталога...</div>
-                ) : filteredItems.length === 0 ? (
-                  <div className="empty-state">
-                    <Gift size={36} />
-                    <strong>{error ? "Каталог недоступен" : "Пока нет объявлений"}</strong>
-                    <span>{error || "Новые предложения появятся здесь."}</span>
-                    <button className="text-button" onClick={loadListings}>
-                      <RefreshCw size={15} /> Обновить
-                    </button>
-                  </div>
-                ) : (
-                  <div className="product-grid">
-                    {filteredItems.map((item) => (
-                      <ProductCard
-                        key={item.id}
-                        item={item}
-                        onClick={() => {
-                          setSelected(item);
-                          setDays(item.min_days);
-                        }}
-                      />
-                    ))}
-                  </div>
-                )}
+              {!loading && items.length === 0 && (
+                <div className="empty-state">
+                  <Gift size={36} />
+                  <strong>{error ? "Каталог недоступен" : "Пока нет подарков"}</strong>
+                  <span>{error || "Новые предложения появятся здесь."}</span>
+                  <button className="text-button" onClick={loadListings}>
+                    <RefreshCw size={15} /> Обновить
+                  </button>
+                </div>
+              )}
 
-                <button className="secondary-button" onClick={() => createDigitalOrder("stars")}>
-                  ⭐ Заказать Telegram Stars
+              <section className="service-grid">
+                <button onClick={() => createDigitalOrder("stars")}>
+                  <Star size={23} />
+                  <strong>Telegram Stars</strong>
+                  <span>Оставить заявку</span>
                 </button>
 
-                <button className="secondary-button" onClick={() => createDigitalOrder("premium")}>
-                  💎 Заказать Premium
+                <button onClick={() => createDigitalOrder("premium")}>
+                  <Gem size={23} />
+                  <strong>Telegram Premium</strong>
+                  <span>Оставить заявку</span>
                 </button>
-              </>
-            )}
+              </section>
+            </>
+          )}
 
-            {tab === "profile" && (
-              <>
-                <div className="section-heading">
-                  <div>
-                    <span className="eyebrow">YOUR ACCOUNT</span>
-                    <h2>Профиль</h2>
-                  </div>
+          {tab === "nft" && (
+            <>
+              <div className="section-heading">
+                <div>
+                  <span className="eyebrow">EXPLORE COLLECTIONS</span>
+                  <h2>Маркет</h2>
                 </div>
-
-                <div className="profile-card">
-                  <div className="profile-avatar">
-                    <User size={30} />
-                  </div>
-                  <div>
-                    <strong>PRESTIGE MEMBER</strong>
-                    <span>Telegram account</span>
-                  </div>
-                  <ShieldCheck size={21} />
-                </div>
-
-                <div className="profile-menu">
-                  <button onClick={loadOrders}>
-                    <ShoppingBag size={19} />
-                    Мои заказы
-                    <ChevronRight size={17} />
-                  </button>
-                  
-<button onClick={loadMyListings}>
-  <Gift size={19} />
-  Мои объявления
-  <ChevronRight size={17} />
-</button>
-                  <button onClick={openSupport}>
-                    <Headphones size={19} />
-                    Поддержка
-                    <ChevronRight size={17} />
-                  </button>
-
-                  <button onClick={() => setMessage("Правила сервиса будут опубликованы отдельно.")}>
-                    <ShieldCheck size={19} />
-                    Правила сервиса
-                    <ChevronRight size={17} />
-                  </button>
-                </div>
-
-                <div className="orders-list">
-                  <h3>История заказов</h3>
-                  {ordersLoading ? (
-                    <p>Загрузка заказов...</p>
-                  ) : orders.length === 0 ? (
-                    <p>Заказов пока нет.</p>
-                  ) : (
-                    orders.map((order) => (
-                      <div className="order-row" key={order.id}>
-                        <div>
-                          <strong>№{order.id}</strong>
-                          <span>{order.kind}</span>
-                        </div>
-                        <span>{order.status}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </>
-            )}
-
-            {message && (
-              <div className="notice">
-                {message}
-                <button onClick={() => setMessage("")}>×</button>
               </div>
-            )}
-          </main>
 
-          <nav className="bottom-nav">
-            <button
-              className={tab === "market" ? "nav-item active" : "nav-item"}
-              onClick={() => setTab("market")}
-            >
-              <ShoppingBag size={20} />
-              <span>Главная</span>
-            </button>
+              <div className="search-box">
+                <Search size={18} />
+                <input
+                  placeholder="Поиск подарков..."
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") loadListings();
+                  }}
+                />
+                <button onClick={loadListings}>Найти</button>
+              </div>
 
-            <button
-              className={tab === "nft" ? "nav-item active" : "nav-item"}
-              onClick={() => setTab("nft")}
-            >
-              <Gift size={20} />
-              <span>Маркет</span>
-            </button>
+              <div className="category-list">
+                {categories.map((item) => (
+                  <button
+                    key={item.id}
+                    className={category === item.id ? "category active" : "category"}
+                    onClick={() => setCategory(item.id)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
 
-            <button
-              className={tab === "profile" ? "nav-item active" : "nav-item"}
-              onClick={() => {
-                setTab("profile");
-                loadOrders();
-              }}
-            >
-              <User size={20} />
-              <span>Профиль</span>
-            </button>
-          </nav>
-        </>
-      )}
-    </div>
-  );
-}
+              {loading ? (
+                <div className="empty-state">Загрузка каталога...</div>
+              ) : filteredItems.length === 0 ? (
+                <div className="empty-state">
+                  <Gift size={36} />
+                  <strong>{error ? "Каталог недоступен" : "Пока нет подарков"}</strong>
+                  <span>{error || "Новые предложения появятся здесь."}</span>
+                  <button className="text-button" onClick={loadListings}>
+                    <RefreshCw size={15} /> Обновить
+                  </button>
+                </div>
+              ) : (
+                <div className="product-grid">
+                  {filteredItems.map((item) => (
+                    <ProductCard
+                      key={item.id}
+                      item={item}
+                      onClick={() => {
+                        setSelected(item);
+                        setDays(item.min_days);
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+
+              <button className="secondary-button" onClick={() => createDigitalOrder("stars")}>
+                ⭐ Заказать Telegram Stars
+              </button>
+
+              <button className="secondary-button" onClick={() => createDigitalOrder("premium")}>
+                💎 Заказать Premium
+              </button>
+            </>
+          )}
+
+          {tab === "profile" && (
+            <>
+              <div className="section-heading">
+                <div>
+                  <span className="eyebrow">YOUR ACCOUNT</span>
+                  <h2>Профиль</h2>
+                </div>
+              </div>
+
+              <div className="profile-card">
+                <div className="profile-avatar">
+                  <User size={30} />
+                </div>
+                <div>
+                  <strong>PRESTIGE MEMBER</strong>
+                  <span>Telegram account</span>
+                </div>
+                <ShieldCheck size={21} />
+              </div>
+
+              <div className="profile-menu">
+                <button onClick={loadOrders}>
+                  <ShoppingBag size={19} />
+                  Мои заказы
+                  <ChevronRight size={17} />
+                </button>
+
+                <button onClick={openSupport}>
+                  <Headphones size={19} />
+                  Поддержка
+                  <ChevronRight size={17} />
+                </button>
+
+                <button onClick={() => setMessage("Правила сервиса будут опубликованы отдельно.")}>
+                  <ShieldCheck size={19} />
+                  Правила сервиса
+                  <ChevronRight size={17} />
+                </button>
+              </div>
+
+              <div className="orders-list">
+                <h3>История заказов</h3>
+                {ordersLoading ? (
+                  <p>Загрузка заказов...</p>
+                ) : orders.length === 0 ? (
+                  <p>Заказов пока нет.</p>
+                ) : (
+                  orders.map((order) => (
+                    <div className="order-row" key={order.id}>
+                      <div>
+                        <strong>№{order.id}</strong>
+                        <span>{order.kind}</span>
+                      </div>
+                      <span>{order.status}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+
+          {message && (
+            <div className="notice">
+              {message}
+              <button onClick={() => setMessage("")}>×</button>
+            </div>
+          )}
+        </main>
+
+        <nav className="bottom-nav">
+          <button
+            className={tab === "market" ? "nav-item active" : "nav-item"}
+            onClick={() => setTab("market")}
+          >
+            <ShoppingBag size={20} />
+            <span>Главная</span>
+          </button>
+
+          <button
+            className={tab === "nft" ? "nav-item active" : "nav-item"}
+            onClick={() => setTab("nft")}
+          >
+            <Gift size={20} />
+            <span>Маркет</span>
+          </button>
+
+          <button
+            className={tab === "profile" ? "nav-item active" : "nav-item"}
+            onClick={() => {
+              setTab("profile");
+              setAdminOpen(false);
+              loadOrders();
+            }}
+          >
+            <User size={20} />
+            <span>Профиль</span>
+          </button>
+        </nav>
+      </>
+    )}
+  </div>
+);
 
 function ProductCard({
   item,
