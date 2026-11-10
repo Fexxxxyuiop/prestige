@@ -767,7 +767,7 @@ async function addAdminListing() {
     )}
   </div>
 );
-
+}
 function ProductCard({
   item,
   onClick,
