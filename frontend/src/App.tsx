@@ -66,6 +66,7 @@ console.log("Telegram initData received:", !!initData);
   const [selectedOption, setSelectedOption] = useState<RentalOption | null>(null);
 
   const [isAdmin, setIsAdmin] = useState(false);
+  const [debugInfo, setDebugInfo] = useState("Проверка ещё не выполнена");
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminListings, setAdminListings] = useState<Listing[]>([]);
 
