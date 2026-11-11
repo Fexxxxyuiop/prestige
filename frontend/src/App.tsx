@@ -429,10 +429,6 @@ function App() {
         </button>
       </header>
 
-      <div className="content" style={{ paddingTop: 8 }}>
-        <div className="notice">{debugInfo}</div>
-      </div>
-
       {isAdmin && (
         <div className="content">
           <button
