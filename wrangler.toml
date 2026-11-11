@@ -1,5 +1,5 @@
 name = "prestige"
-main = "worker.js"
+main = main = "frontend/src/worker.js"
 compatibility_date = "2026-11-11"
 
 [[d1_databases]]
