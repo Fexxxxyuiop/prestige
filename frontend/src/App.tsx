@@ -140,9 +140,9 @@ console.log("INITDATA LENGTH:", initData.length);
 
       const data = await response.json();
       setItems(Array.isArray(data.listings) ? data.listings : []);
-    } catch {
+    } catch (error) {
       setItems([]);
-      setError("Не удалось загрузить каталог. Попробуйте обновить страницу.");
+      setError("ОШИБКА КАТАЛОГА: " + String(error));
     } finally {
       setLoading(false);
     }
