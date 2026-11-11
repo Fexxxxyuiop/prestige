@@ -50,6 +50,8 @@ type FormOption = {
 
 function App() {
   const initData = window.Telegram?.WebApp?.initData || "";
+console.log("Telegram WebApp:", !!window.Telegram?.WebApp);
+console.log("Telegram initData received:", !!initData);
 
   const headers = {
     "Content-Type": "application/json",
