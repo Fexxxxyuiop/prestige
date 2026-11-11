@@ -714,3 +714,49 @@ button {
     height: 125px;
   }
 }
+/* PRESTIGE ADMIN DARK THEME */
+.admin-input {
+  width: 100%;
+  min-height: 46px;
+  margin: 8px 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #293b58;
+  border-radius: 11px;
+  outline: none;
+  background: #0d1523 !important;
+  color: #f4f6fc !important;
+  font-size: 13px;
+  color-scheme: dark;
+}
+
+.admin-input::placeholder {
+  color: #71819b;
+}
+
+.detail-card label {
+  display: block;
+  margin-top: 10px;
+  color: #a8b8d2;
+  font-size: 11px;
+}
+
+.detail-card select option {
+  background: #111a29;
+  color: #fff;
+}
+
+.detail-card input:focus,
+.detail-card textarea:focus,
+.detail-card select:focus {
+  border-color: #4786f5;
+}
+
+.detail-card textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.detail-card button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
