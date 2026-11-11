@@ -1,0 +1,8 @@
+name = "prestige"
+main = "worker.js"
+compatibility_date = "2026-11-11"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "prestige-core"
+database_id = "00000003-00000002-00005120-dfea62387e31deee51670c80eb584815"
