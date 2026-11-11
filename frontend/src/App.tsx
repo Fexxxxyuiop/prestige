@@ -95,23 +95,37 @@ console.log("Telegram initData received:", !!initData);
   }, []);
 
   async function checkAdmin() {
-    if (!initData) return;
+  setDebugInfo("Проверяем Telegram...");
 
-    try {
-      const response = await fetch(`${API}/api/admin/listings`, {
-        headers
-      });
-
-      if (response.ok) {
-        setIsAdmin(true);
-        const data = await response.json();
-        setAdminListings(data.listings || []);
-      }
-    } catch {
-      setIsAdmin(false);
-    }
+  if (!window.Telegram?.WebApp) {
+    setDebugInfo("Ошибка: Telegram WebApp не обнаружен");
+    return;
   }
 
+  if (!initData) {
+    setDebugInfo("Ошибка: Telegram не передал initData");
+    return;
+  }
+
+  setDebugInfo("Telegram обнаружен. Проверяем права...");
+
+  try {
+    const response = await fetch(`${API}/api/admin/listings`, {
+      headers
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      setIsAdmin(true);
+      setAdminListings(data.listings || []);
+      setDebugInfo("Успешно: администратор подтверждён");
+    } else {
+      setDebugInfo(`Ошибка авторизации: HTTP ${response.status}`);
+    }
+  } catch {
+    setDebugInfo("Ошибка соединения с сервером");
+  }
+}
   async function loadListings() {
     setLoading(true);
     setError("");
@@ -354,6 +368,9 @@ console.log("Telegram initData received:", !!initData);
           <Headphones size={19} />
         </button>
       </header>
+      <div className="content" style={{ paddingTop: 8 }}>
+  <div className="notice">{debugInfo}</div>
+</div>
 
       {isAdmin && (
         <div className="content">
