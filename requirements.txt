@@ -7,3 +7,4 @@ aiosqlite>=0.20,<1
 alembic>=1.13,<2
 pydantic-settings>=2.5,<3
 pydantic>=2.8,<3
+greenlet
