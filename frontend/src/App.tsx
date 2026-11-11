@@ -127,49 +127,45 @@ console.log("INITDATA LENGTH:", initData.length);
     setDebugInfo("Ошибка соединения с сервером");
   }
 }
-  async function loadListings() {
-    setLoading(true);
-    setError("");
-
-    try {
-      const response = await fetch(`${API}/api/listings`);
-
-      if (!response.ok) {
-        throw new Error("Catalog unavailable");
-      }
-
-      const data = await response.json();
-      setItems(Array.isArray(data.listings) ? data.listings : []);
-    } catch (error) {
-      setItems([]);
-      setError("ОШИБКА КАТАЛОГА: " + String(error));
-    } finally {
-      setLoading(false);
-    }
+  
+async function loadAdminListings() {
+  if (!initData) {
+    setDebugInfo("ОШИБКА: Telegram не передал initData");
+    return;
   }
 
-  async function loadAdminListings() {
-    if (!initData) {
-      setMessage("Откройте приложение через Telegram.");
+  setDebugInfo("Проверка доступа к админ-панели...");
+
+  try {
+    const response = await fetch(`${API}/api/admin/listings`, {
+      headers
+    });
+
+    const raw = await response.text();
+
+    let data: any = {};
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = { error: raw || "Пустой ответ сервера" };
+    }
+
+    if (!response.ok) {
+      setDebugInfo(
+        `ОШИБКА HTTP ${response.status}: ${data.error || "Неизвестная ошибка"} ${data.details || ""}`
+      );
       return;
     }
 
-    try {
-      const response = await fetch(`${API}/api/admin/listings`, {
-        headers
-      });
-
-      if (!response.ok) {
-        throw new Error("Нет доступа администратора");
-      }
-
-      const data = await response.json();
-      setAdminListings(data.listings || []);
-      setIsAdmin(true);
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Ошибка загрузки");
-    }
+    setAdminListings(data.listings || []);
+    setIsAdmin(true);
+    setDebugInfo("Администратор подтверждён");
+  } catch (error) {
+    setDebugInfo(
+      `ОШИБКА ЗАПРОСА: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
+}
 
   function resetForm() {
     setEditingId(null);
