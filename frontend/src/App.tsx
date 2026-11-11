@@ -559,10 +559,11 @@ console.log("Telegram initData received:", !!initData);
           </button>
 
           {message && (
-            <div className="notice">
-              {message}
-              <button onClick={() => setMessage("")}>×</button>
-            </div>
+            <div style={{color: "white", padding: 12, background: "#333"}}>
+  ДИАГНОСТИКА: {debugInfo}
+</div>
+              
+              
           )}
         </main>
       ) : selected ? (
