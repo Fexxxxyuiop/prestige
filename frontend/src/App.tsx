@@ -121,7 +121,7 @@ console.log("INITDATA LENGTH:", initData.length);
       setAdminListings(data.listings || []);
       setDebugInfo("Успешно: администратор подтверждён");
     } else {
-      setDebugInfo(`Ошибка авторизации: HTTP ${response.status}`);
+      setDebugInfo(`Ошибка авторизации: HTTP ${response.status} — ${await response.text()}`);
     }
   } catch {
     setDebugInfo("Ошибка соединения с сервером");
