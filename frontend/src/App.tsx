@@ -1,9 +1,9 @@
 
 import { useEffect, useState } from "react";
 import {
-  Search, Gift, Gem, User, ShoppingBag, ChevronRight,
-  ArrowLeft, ShieldCheck, Headphones, Crown, RefreshCw,
-  Plus, Trash2, Pencil, Eye, EyeOff
+  Search, Gift, User, ShoppingBag, ChevronRight,
+  ArrowLeft, ShieldCheck, Headphones, Crown,
+  RefreshCw, Plus, Trash2, Pencil, Eye, EyeOff
 } from "lucide-react";
 
 const API = (
@@ -49,11 +49,8 @@ type FormOption = {
 };
 
 function App() {
-  
   const initData = window.Telegram?.WebApp?.initData || "";
-console.log("WEBAPP:", !!window.Telegram?.WebApp);
-console.log("INITDATA LENGTH:", initData.length);
-  
+
   const headers = {
     "Content-Type": "application/json",
     "X-Telegram-Init-Data": initData
@@ -62,14 +59,16 @@ console.log("INITDATA LENGTH:", initData.length);
   const [tab, setTab] = useState("market");
   const [category, setCategory] = useState("all");
   const [search, setSearch] = useState("");
+
   const [items, setItems] = useState<Listing[]>([]);
   const [selected, setSelected] = useState<Listing | null>(null);
-  const [selectedOption, setSelectedOption] = useState<RentalOption | null>(null);
+  const [selectedOption, setSelectedOption] =
+    useState<RentalOption | null>(null);
 
   const [isAdmin, setIsAdmin] = useState(false);
-  const [debugInfo, setDebugInfo] = useState("Проверка ещё не выполнена");
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminListings, setAdminListings] = useState<Listing[]>([]);
+  const [debugInfo, setDebugInfo] = useState("Проверяем приложение...");
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [title, setTitle] = useState("");
@@ -91,81 +90,119 @@ console.log("INITDATA LENGTH:", initData.length);
   useEffect(() => {
     window.Telegram?.WebApp?.ready();
     window.Telegram?.WebApp?.expand();
-    loadListings();
-    checkAdmin();
+
+    void loadListings();
+    void checkAdmin();
   }, []);
 
-  async function checkAdmin() {
-  setDebugInfo("Проверяем Telegram...");
+  async function loadListings() {
+    setLoading(true);
+    setError("");
 
-  if (!window.Telegram?.WebApp) {
-    setDebugInfo("Ошибка: Telegram WebApp не обнаружен");
-    return;
-  }
-
-  if (!initData) {
-    setDebugInfo("Ошибка: Telegram не передал initData");
-    return;
-  }
-
-  setDebugInfo("Telegram обнаружен. Проверяем права...");
-
-  try {
-    const response = await fetch(`${API}/api/admin/listings`, {
-      headers
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      setIsAdmin(true);
-      setAdminListings(data.listings || []);
-      setDebugInfo("Успешно: администратор подтверждён");
-    } else {
-      setDebugInfo(`Ошибка авторизации: HTTP ${response.status} — ${await response.text()}`);
-    }
-  } catch {
-    setDebugInfo("Ошибка соединения с сервером");
-  }
-}
-  
-async function loadAdminListings() {
-  if (!initData) {
-    setDebugInfo("ОШИБКА: Telegram не передал initData");
-    return;
-  }
-
-  setDebugInfo("Проверка доступа к админ-панели...");
-
-  try {
-    const response = await fetch(`${API}/api/admin/listings`, {
-      headers
-    });
-
-    const raw = await response.text();
-
-    let data: any = {};
     try {
-      data = JSON.parse(raw);
-    } catch {
-      data = { error: raw || "Пустой ответ сервера" };
-    }
+      const response = await fetch(`${API}/api/listings`);
 
-    if (!response.ok) {
-      setDebugInfo(
-        `ОШИБКА HTTP ${response.status}: ${data.error || "Неизвестная ошибка"} ${data.details || ""}`
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      setItems(
+        Array.isArray(data.listings) ? data.listings : []
       );
+    } catch (e) {
+      setItems([]);
+      setError(
+        e instanceof Error ? e.message : "Ошибка загрузки каталога"
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function checkAdmin() {
+    if (!window.Telegram?.WebApp) {
+      setDebugInfo("Открой приложение через Telegram");
       return;
     }
 
-    setAdminListings(data.listings || []);
-    setIsAdmin(true);
-    setDebugInfo("Администратор подтверждён");
-  } catch (error) {
-    setDebugInfo(
-      `ОШИБКА ЗАПРОСА: ${error instanceof Error ? error.message : String(error)}`
-    );
+    if (!initData) {
+      setDebugInfo("Telegram не передал данные авторизации");
+      return;
+    }
+
+    setDebugInfo("Проверяем права администратора...");
+
+    try {
+      const response = await fetch(`${API}/api/admin/listings`, {
+        headers
+      });
+
+      const raw = await response.text();
+      let data: any = {};
+
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        data = { error: raw };
+      }
+
+      if (!response.ok) {
+        setIsAdmin(false);
+        setDebugInfo(
+          `Доступ не подтверждён: HTTP ${response.status} — ${data.error || "ошибка"}`
+        );
+        return;
+      }
+
+      setIsAdmin(true);
+      setAdminListings(data.listings || []);
+      setDebugInfo("Администратор подтверждён");
+    } catch (e) {
+      setIsAdmin(false);
+      setDebugInfo(
+        `Ошибка соединения: ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
   }
-}
+
+  async function loadAdminListings() {
+    if (!initData) {
+      setDebugInfo("Нет данных Telegram для авторизации");
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API}/api/admin/listings`, {
+        headers
+      });
+
+      const raw = await response.text();
+      let data: any = {};
+
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        data = { error: raw };
+      }
+
+      if (!response.ok) {
+        setDebugInfo(
+          `Ошибка админ-панели HTTP ${response.status}: ${data.error || "Неизвестная ошибка"}`
+        );
+        return;
+      }
+
+      setAdminListings(data.listings || []);
+      setIsAdmin(true);
+      setDebugInfo("Администратор подтверждён");
+    } catch (e) {
+      setDebugInfo(
+        `Ошибка запроса: ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
+  }
 
   function resetForm() {
     setEditingId(null);
@@ -195,20 +232,26 @@ async function loadAdminListings() {
     );
 
     if (!item.rental_options?.length) {
-      setOptions([{ duration_days: "7", price: String(item.price || 0) }]);
+      setOptions([
+        { duration_days: "7", price: String(item.price || 0) }
+      ]);
     }
 
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function addOption() {
-    setOptions([
-      ...options,
+    setOptions(current => [
+      ...current,
       { duration_days: "14", price: "300" }
     ]);
   }
 
-  function updateOption(index: number, field: keyof FormOption, value: string) {
+  function updateOption(
+    index: number,
+    field: keyof FormOption,
+    value: string
+  ) {
     setOptions(current =>
       current.map((option, i) =>
         i === index ? { ...option, [field]: value } : option
@@ -279,6 +322,7 @@ async function loadAdminListings() {
 
       setMessage(editingId ? "Подарок обновлён!" : "Подарок добавлен!");
       resetForm();
+
       await loadAdminListings();
       await loadListings();
     } catch (e) {
@@ -289,7 +333,8 @@ async function loadAdminListings() {
   }
 
   async function changeStatus(item: Listing) {
-    const newStatus = item.status === "APPROVED" ? "HIDDEN" : "APPROVED";
+    const newStatus =
+      item.status === "APPROVED" ? "HIDDEN" : "APPROVED";
 
     try {
       const response = await fetch(
@@ -301,11 +346,18 @@ async function loadAdminListings() {
         }
       );
 
-      if (!response.ok) throw new Error("Не удалось изменить статус");
+      if (!response.ok) {
+        throw new Error("Не удалось изменить статус");
+      }
 
       await loadAdminListings();
       await loadListings();
-      setMessage(newStatus === "APPROVED" ? "Подарок опубликован" : "Подарок скрыт");
+
+      setMessage(
+        newStatus === "APPROVED"
+          ? "Подарок опубликован"
+          : "Подарок скрыт"
+      );
     } catch {
       setMessage("Ошибка изменения статуса");
     }
@@ -315,14 +367,20 @@ async function loadAdminListings() {
     if (!window.confirm("Удалить этот подарок?")) return;
 
     try {
-      const response = await fetch(`${API}/api/admin/listings/${id}`, {
-        method: "DELETE",
-        headers
-      });
+      const response = await fetch(
+        `${API}/api/admin/listings/${id}`,
+        {
+          method: "DELETE",
+          headers
+        }
+      );
 
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        throw new Error("Не удалось удалить");
+      }
 
       setMessage("Подарок удалён.");
+
       if (editingId === id) resetForm();
 
       await loadAdminListings();
@@ -343,8 +401,13 @@ async function loadAdminListings() {
   }
 
   const filteredItems = items.filter(item => {
-    const matchesSearch = item.title.toLowerCase().includes(search.toLowerCase());
-    const matchesCategory = category === "all" || item.category === category;
+    const matchesSearch = item.title
+      .toLowerCase()
+      .includes(search.toLowerCase());
+
+    const matchesCategory =
+      category === "all" || item.category === category;
+
     return matchesSearch && matchesCategory;
   });
 
@@ -365,9 +428,10 @@ async function loadAdminListings() {
           <Headphones size={19} />
         </button>
       </header>
+
       <div className="content" style={{ paddingTop: 8 }}>
-  <div className="notice">{debugInfo}</div>
-</div>
+        <div className="notice">{debugInfo}</div>
+      </div>
 
       {isAdmin && (
         <div className="content">
@@ -377,7 +441,10 @@ async function loadAdminListings() {
               const next = !adminOpen;
               setAdminOpen(next);
               setSelected(null);
-              if (next) await loadAdminListings();
+
+              if (next) {
+                await loadAdminListings();
+              }
             }}
           >
             <ShieldCheck size={18} />
@@ -397,7 +464,9 @@ async function loadAdminListings() {
           </div>
 
           <div className="detail-card">
-            <h3>{editingId ? "Редактировать подарок" : "Добавить подарок"}</h3>
+            <h3>
+              {editingId ? "Редактировать подарок" : "Добавить подарок"}
+            </h3>
 
             <label>Название подарка</label>
             <input
@@ -487,7 +556,11 @@ async function loadAdminListings() {
               disabled={saving}
               onClick={saveListing}
             >
-              {saving ? "Сохранение..." : editingId ? "Сохранить изменения" : "Добавить подарок"}
+              {saving
+                ? "Сохранение..."
+                : editingId
+                  ? "Сохранить изменения"
+                  : "Добавить подарок"}
               <ChevronRight size={18} />
             </button>
 
@@ -496,6 +569,8 @@ async function loadAdminListings() {
                 Отменить редактирование
               </button>
             )}
+
+            {message && <div className="notice">{message}</div>}
           </div>
 
           <div className="section-heading">
@@ -503,7 +578,11 @@ async function loadAdminListings() {
               <span className="eyebrow">INVENTORY</span>
               <h2>Все подарки</h2>
             </div>
-            <button className="text-button" onClick={loadAdminListings}>
+
+            <button
+              className="text-button"
+              onClick={loadAdminListings}
+            >
               <RefreshCw size={15} />
             </button>
           </div>
@@ -523,24 +602,41 @@ async function loadAdminListings() {
                     }}
                   />
                 )}
+
                 <strong>{item.title}</strong>
-                <span>{item.status === "APPROVED" ? "Опубликован" : "Скрыт"}</span>
                 <span>
-                  {(item.rental_options || []).map(o =>
-                    `${o.duration_days} дн. — ${o.price}`
-                  ).join(" / ")}
+                  {item.status === "APPROVED" ? "Опубликован" : "Скрыт"}
+                </span>
+
+                <span>
+                  {(item.rental_options || [])
+                    .map(o => `${o.duration_days} дн. — ${o.price}`)
+                    .join(" / ")}
                 </span>
               </div>
 
               <div className="category-list">
-                <button className="secondary-button" onClick={() => editListing(item)}>
+                <button
+                  className="secondary-button"
+                  onClick={() => editListing(item)}
+                >
                   <Pencil size={16} /> Изменить
                 </button>
-                <button className="secondary-button" onClick={() => changeStatus(item)}>
-                  {item.status === "APPROVED" ? <EyeOff size={16} /> : <Eye size={16} />}
+
+                <button
+                  className="secondary-button"
+                  onClick={() => changeStatus(item)}
+                >
+                  {item.status === "APPROVED"
+                    ? <EyeOff size={16} />
+                    : <Eye size={16} />}
                   {item.status === "APPROVED" ? "Скрыть" : "Опубликовать"}
                 </button>
-                <button className="secondary-button" onClick={() => deleteListing(item.id)}>
+
+                <button
+                  className="secondary-button"
+                  onClick={() => deleteListing(item.id)}
+                >
                   <Trash2 size={16} /> Удалить
                 </button>
               </div>
@@ -548,24 +644,24 @@ async function loadAdminListings() {
           ))}
 
           {adminListings.length === 0 && (
-            <div className="empty-state">Подарков пока нет. Добавь первый выше.</div>
+            <div className="empty-state">
+              Подарков пока нет. Добавь первый выше.
+            </div>
           )}
 
-          <button className="secondary-button" onClick={() => setAdminOpen(false)}>
+          <button
+            className="secondary-button"
+            onClick={() => setAdminOpen(false)}
+          >
             Вернуться в магазин
           </button>
-
-          {message && (
-            <div style={{color: "white", padding: 12, background: "#333"}}>
-  ДИАГНОСТИКА: {debugInfo}
-</div>
-              
-              
-          )}
         </main>
       ) : selected ? (
         <main className="content">
-          <button className="back-button" onClick={() => setSelected(null)}>
+          <button
+            className="back-button"
+            onClick={() => setSelected(null)}
+          >
             <ArrowLeft size={17} /> Назад в каталог
           </button>
 
@@ -591,7 +687,9 @@ async function loadAdminListings() {
                   onClick={() => setSelectedOption(option)}
                 >
                   {option.duration_days} дней — {option.price}
-                  {selectedOption?.duration_days === option.duration_days ? " ✓" : ""}
+                  {selectedOption?.duration_days === option.duration_days
+                    ? " ✓"
+                    : ""}
                 </button>
               ))}
 
@@ -604,14 +702,16 @@ async function loadAdminListings() {
               className="primary-button"
               disabled={!selectedOption}
               onClick={() => {
-                setMessage("Заявка на аренду будет подключена следующим этапом.");
+                setMessage(
+                  "Заявка на аренду будет согласована с администрацией."
+                );
               }}
             >
               Оставить заявку <ChevronRight size={18} />
             </button>
 
             <p className="small-note">
-              Оплата и подтверждение аренды согласовываются с администрацией.
+              Условия аренды и подтверждение заявки согласовываются отдельно.
             </p>
           </div>
 
@@ -630,11 +730,17 @@ async function loadAdminListings() {
                       <br />
                       <span>цифровой роскоши</span>
                     </h1>
-                    <p>Коллекционные подарки, аренда NFT и цифровые услуги.</p>
-                    <button className="hero-button" onClick={() => setTab("nft")}>
+                    <p>
+                      Коллекционные подарки, аренда NFT и цифровые услуги.
+                    </p>
+                    <button
+                      className="hero-button"
+                      onClick={() => setTab("nft")}
+                    >
                       Открыть каталог <ChevronRight size={17} />
                     </button>
                   </div>
+
                   <div className="hero-decoration">
                     <Crown size={76} strokeWidth={1} />
                   </div>
@@ -649,19 +755,30 @@ async function loadAdminListings() {
 
                 <div className="product-grid">
                   {items.slice(0, 2).map(item => (
-                    <ProductCard key={item.id} item={item} onClick={() => {
-                      setSelected(item);
-                      setSelectedOption(null);
-                    }} />
+                    <ProductCard
+                      key={item.id}
+                      item={item}
+                      onClick={() => {
+                        setSelected(item);
+                        setSelectedOption(null);
+                      }}
+                    />
                   ))}
                 </div>
 
                 {items.length === 0 && !loading && (
                   <div className="empty-state">
                     <Gift size={36} />
-                    <strong>{error ? "Каталог недоступен" : "Пока нет подарков"}</strong>
-                    <span>{error || "Новые предложения появятся здесь."}</span>
-                    <button className="text-button" onClick={loadListings}>
+                    <strong>
+                      {error ? "Каталог недоступен" : "Пока нет подарков"}
+                    </strong>
+                    <span>
+                      {error || "Новые предложения появятся здесь."}
+                    </span>
+                    <button
+                      className="text-button"
+                      onClick={loadListings}
+                    >
                       <RefreshCw size={15} /> Обновить
                     </button>
                   </div>
@@ -696,7 +813,9 @@ async function loadAdminListings() {
                   ].map(([id, label]) => (
                     <button
                       key={id}
-                      className={category === id ? "category active" : "category"}
+                      className={
+                        category === id ? "category active" : "category"
+                      }
                       onClick={() => setCategory(id)}
                     >
                       {label}
@@ -709,16 +828,22 @@ async function loadAdminListings() {
                 ) : (
                   <div className="product-grid">
                     {filteredItems.map(item => (
-                      <ProductCard key={item.id} item={item} onClick={() => {
-                        setSelected(item);
-                        setSelectedOption(null);
-                      }} />
+                      <ProductCard
+                        key={item.id}
+                        item={item}
+                        onClick={() => {
+                          setSelected(item);
+                          setSelectedOption(null);
+                        }}
+                      />
                     ))}
                   </div>
                 )}
 
                 {!loading && filteredItems.length === 0 && (
-                  <div className="empty-state">Подарки не найдены.</div>
+                  <div className="empty-state">
+                    Подарки не найдены.
+                  </div>
                 )}
               </>
             )}
@@ -749,7 +874,12 @@ async function loadAdminListings() {
                     Поддержка
                     <ChevronRight size={17} />
                   </button>
-                  <button onClick={() => setMessage("Правила сервиса будут опубликованы отдельно.")}>
+
+                  <button
+                    onClick={() =>
+                      setMessage("Правила сервиса будут опубликованы отдельно.")
+                    }
+                  >
                     <ShieldCheck size={19} />
                     Правила сервиса
                     <ChevronRight size={17} />
@@ -808,7 +938,9 @@ function ProductCard({
     .filter(option => option.is_active !== 0)
     .map(option => option.price);
 
-  const minPrice = prices.length ? Math.min(...prices) : item.price;
+  const minPrice = prices.length
+    ? Math.min(...prices)
+    : item.price;
 
   return (
     <button className="product-card" onClick={onClick}>
