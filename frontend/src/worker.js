@@ -1,14 +1,29 @@
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "https://fexxxxyuiop.github.io",
-  "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, X-Telegram-Init-Data"
-};
+const allowedOrigins = [
+  "https://fexxxxyuiop.github.io",
+  "https://web.telegram.org",
+  "https://t.me"
+];
 
-function response(data, status = 200) {
+function getCorsHeaders(request) {
+  const origin = request.headers.get("Origin") || "";
+  const allowed = allowedOrigins.includes(origin);
+
+  return {
+    "Access-Control-Allow-Origin": allowed ? origin : "https://fexxxxyuiop.github.io",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, X-Telegram-Init-Data",
+    "Vary": "Origin"
+  };
+}
+
+function response(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" }
+    headers: {
+      ...headers,
+      "Content-Type": "application/json"
+    }
   });
 }
 
@@ -24,7 +39,7 @@ async function verifyTelegram(initData, botToken) {
   const authDate = Number(params.get("auth_date"));
   if (!authDate || Date.now() / 1000 - authDate > 86400) return null;
 
-  const dataCheckString = [...params.entries()]
+  const checkString = [...params.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => `${key}=${value}`)
     .join("\n");
@@ -56,14 +71,14 @@ async function verifyTelegram(initData, botToken) {
   const signature = await crypto.subtle.sign(
     "HMAC",
     signingKey,
-    encoder.encode(dataCheckString)
+    encoder.encode(checkString)
   );
 
-  const calculatedHash = [...new Uint8Array(signature)]
+  const calculated = [...new Uint8Array(signature)]
     .map(b => b.toString(16).padStart(2, "0"))
     .join("");
 
-  if (calculatedHash !== hash) return null;
+  if (calculated !== hash) return null;
 
   try {
     return JSON.parse(params.get("user") || "null");
@@ -142,24 +157,21 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
+    const cors = getCorsHeaders(request);
 
     if (method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders });
+      return new Response(null, { status: 204, headers: cors });
     }
 
     try {
       if (path === "/health") {
-        return response({ ok: true, service: "prestige-market-api" });
+        return response({ ok: true, service: "prestige-market-api" }, 200, cors);
       }
 
       if (path === "/") {
-        return response({
-          service: "Prestige Market API",
-          status: "online"
-        });
+        return response({ service: "Prestige Market API", status: "online" }, 200, cors);
       }
 
-      // Публичный каталог
       if (path === "/api/listings" && method === "GET") {
         const result = await env.DB.prepare(`
           SELECT * FROM listings
@@ -170,34 +182,32 @@ export default {
         const listings = [];
 
         for (const item of result.results || []) {
-          listings.push(await getListing(env, item.id));
+          const listing = await getListing(env, item.id);
+          if (listing) listings.push(listing);
         }
 
-        return response({ ok: true, listings });
+        return response({ ok: true, listings }, 200, cors);
       }
 
-      // Одна карточка подарка
       const listingMatch = path.match(/^\/api\/listings\/(\d+)$/);
 
       if (listingMatch && method === "GET") {
         const item = await getListing(env, Number(listingMatch[1]));
 
         if (!item || item.status !== "APPROVED") {
-          return response({ error: "Gift not found" }, 404);
+          return response({ error: "Gift not found" }, 404, cors);
         }
 
-        return response({ ok: true, listing: item });
+        return response({ ok: true, listing: item }, 200, cors);
       }
 
-      // Все действия ниже требуют администратора
       if (path.startsWith("/api/admin/")) {
         const admin = await getAdmin(request, env);
 
         if (!admin) {
-          return response({ error: "Admin access denied" }, 403);
+          return response({ error: "Admin access denied" }, 403, cors);
         }
 
-        // Список подарков
         if (path === "/api/admin/listings" && method === "GET") {
           const result = await env.DB.prepare(`
             SELECT * FROM listings ORDER BY created_at DESC
@@ -206,13 +216,13 @@ export default {
           const listings = [];
 
           for (const item of result.results || []) {
-            listings.push(await getListing(env, item.id));
+            const listing = await getListing(env, item.id);
+            if (listing) listings.push(listing);
           }
 
-          return response({ ok: true, listings });
+          return response({ ok: true, listings }, 200, cors);
         }
 
-        // Добавление подарка
         if (path === "/api/admin/listings" && method === "POST") {
           const body = await request.json();
 
@@ -223,15 +233,13 @@ export default {
           const options = body.rental_options;
 
           if (!title || !Array.isArray(options) || options.length === 0) {
-            return response({
-              error: "Title and rental options are required"
-            }, 400);
+            return response({ error: "Title and rental options are required" }, 400, cors);
           }
 
           const firstPrice = Number(options[0].price);
 
           if (!Number.isFinite(firstPrice) || firstPrice < 0) {
-            return response({ error: "Invalid price" }, 400);
+            return response({ error: "Invalid price" }, 400, cors);
           }
 
           const result = await env.DB.prepare(`
@@ -257,10 +265,9 @@ export default {
           return response({
             ok: true,
             listing: await getListing(env, id)
-          }, 201);
+          }, 201, cors);
         }
 
-        // Изменение подарка
         const editMatch = path.match(/^\/api\/admin\/listings\/(\d+)$/);
 
         if (editMatch && method === "PATCH") {
@@ -268,16 +275,16 @@ export default {
           const body = await request.json();
 
           const existing = await getListing(env, id);
-          if (!existing) return response({ error: "Not found" }, 404);
+          if (!existing) return response({ error: "Not found" }, 404, cors);
 
           const title = String(body.title ?? existing.title).trim();
           const description = String(body.description ?? existing.description ?? "");
           const category = String(body.category ?? existing.category);
           const imageUrl = String(body.image_url ?? existing.image_url ?? "");
-
           const status = body.status ?? existing.status;
+
           if (!["APPROVED", "PENDING", "HIDDEN"].includes(status)) {
-            return response({ error: "Invalid status" }, 400);
+            return response({ error: "Invalid status" }, 400, cors);
           }
 
           await env.DB.prepare(`
@@ -285,13 +292,11 @@ export default {
             SET title = ?, description = ?, category = ?,
                 image_url = ?, status = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-          `).bind(
-            title, description, category, imageUrl, status, id
-          ).run();
+          `).bind(title, description, category, imageUrl, status, id).run();
 
           if (body.rental_options !== undefined) {
             if (!Array.isArray(body.rental_options) || !body.rental_options.length) {
-              return response({ error: "At least one rental option required" }, 400);
+              return response({ error: "At least one rental option required" }, 400, cors);
             }
 
             await saveOptions(env, id, body.rental_options);
@@ -302,10 +307,9 @@ export default {
           return response({
             ok: true,
             listing: await getListing(env, id)
-          });
+          }, 200, cors);
         }
 
-        // Удаление подарка
         if (editMatch && method === "DELETE") {
           const id = Number(editMatch[1]);
 
@@ -319,19 +323,19 @@ export default {
 
           await audit(env, admin.id, "delete_listing", String(id));
 
-          return response({ ok: true, deleted: id });
+          return response({ ok: true, deleted: id }, 200, cors);
         }
 
-        return response({ error: "Admin route not found" }, 404);
+        return response({ error: "Admin route not found" }, 404, cors);
       }
 
-      return response({ error: "Not found" }, 404);
+      return response({ error: "Not found" }, 404, cors);
 
     } catch (error) {
       return response({
         error: "Internal server error",
-        details: error.message
-      }, 500);
+        details: error?.message || "Unknown error"
+      }, 500, cors);
     }
   }
 };
