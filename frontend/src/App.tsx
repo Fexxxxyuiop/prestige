@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 import {
   Search, Gift, User, ShoppingBag, ChevronRight,
@@ -24,13 +25,13 @@ declare global {
   }
 }
 
-type Currency = "USD" | "RUB" | "TON";
-type Rates = { RUB: number; TON: number };
+type Currency = "USDT" | "RUB";
 
 type RentalOption = {
   id?: number;
   duration_days: number;
   price: number;
+  currency?: string;
   is_active?: number;
 };
 
@@ -47,7 +48,8 @@ type Listing = {
 
 type FormOption = {
   duration_days: string;
-  price: string;
+  price_usdt: string;
+  price_rub: string;
 };
 
 function App() {
@@ -58,18 +60,14 @@ function App() {
     "X-Telegram-Init-Data": initData
   };
 
-  const [currency, setCurrency] = useState<Currency>("USD");
-  const [rates, setRates] = useState<Rates | null>(null);
+  const [currency, setCurrency] = useState<Currency>("USDT");
 
-  function formatPrice(usd: number) {
-    if (currency === "USD") return `${usd.toFixed(2)} USD`;
-    if (!rates) return "Курс загружается…";
-    if (currency === "RUB") {
-      return `${(usd * rates.RUB).toLocaleString("ru-RU", {
-        maximumFractionDigits: 0
-      })} ₽`;
-    }
-    return `${(usd * rates.TON).toFixed(3)} TON`;
+  function formatPrice(amount: number) {
+    return currency === "USDT"
+      ? `${amount.toFixed(2)} USDT`
+      : `${amount.toLocaleString("ru-RU", {
+          maximumFractionDigits: 2
+        })} ₽`;
   }
 
   const [tab, setTab] = useState("market");
@@ -93,9 +91,9 @@ function App() {
   const [giftCategory, setGiftCategory] = useState("gifts");
 
   const [options, setOptions] = useState<FormOption[]>([
-    { duration_days: "3", price: "100" },
-    { duration_days: "7", price: "200" },
-    { duration_days: "30", price: "500" }
+    { duration_days: "3", price_usdt: "3", price_rub: "300" },
+    { duration_days: "7", price_usdt: "5", price_rub: "500" },
+    { duration_days: "30", price_usdt: "10", price_rub: "1000" }
   ]);
 
   const [loading, setLoading] = useState(false);
@@ -109,26 +107,7 @@ function App() {
 
     void loadListings();
     void checkAdmin();
-    void loadRates();
   }, []);
-
-  async function loadRates() {
-    try {
-      const response = await fetch(`${API}/api/rates`);
-      if (!response.ok) throw new Error("Курсы временно недоступны");
-
-      const data = await response.json();
-
-      if (Number(data.RUB) > 0 && Number(data.TON) > 0) {
-        setRates({
-          RUB: Number(data.RUB),
-          TON: Number(data.TON)
-        });
-      }
-    } catch {
-      setRates(null);
-    }
-  }
 
   async function loadListings() {
     setLoading(true);
@@ -246,9 +225,9 @@ function App() {
     setImageUrl("");
     setGiftCategory("gifts");
     setOptions([
-      { duration_days: "3", price: "100" },
-      { duration_days: "7", price: "200" },
-      { duration_days: "30", price: "500" }
+      { duration_days: "3", price_usdt: "3", price_rub: "300" },
+      { duration_days: "7", price_usdt: "5", price_rub: "500" },
+      { duration_days: "30", price_usdt: "10", price_rub: "1000" }
     ]);
   }
 
@@ -259,18 +238,37 @@ function App() {
     setImageUrl(item.image_url || "");
     setGiftCategory(item.category || "gifts");
 
-    setOptions(
-      (item.rental_options || []).map(option => ({
-        duration_days: String(option.duration_days),
-        price: String(option.price)
-      }))
-    );
+    const grouped = new Map<number, FormOption>();
 
-    if (!item.rental_options?.length) {
-      setOptions([
-        { duration_days: "7", price: String(item.price || 0) }
-      ]);
-    }
+    (item.rental_options || []).forEach(option => {
+      const days = Number(option.duration_days);
+
+      const row = grouped.get(days) || {
+        duration_days: String(days),
+        price_usdt: "",
+        price_rub: ""
+      };
+
+      if (
+        String(option.currency || "USD").toUpperCase() === "RUB"
+      ) {
+        row.price_rub = String(option.price);
+      } else {
+        row.price_usdt = String(option.price);
+      }
+
+      grouped.set(days, row);
+    });
+
+    setOptions(
+      grouped.size
+        ? Array.from(grouped.values())
+        : [{
+            duration_days: "7",
+            price_usdt: String(item.price || 0),
+            price_rub: ""
+          }]
+    );
 
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -278,7 +276,11 @@ function App() {
   function addOption() {
     setOptions(current => [
       ...current,
-      { duration_days: "14", price: "300" }
+      {
+        duration_days: "14",
+        price_usdt: "7",
+        price_rub: "700"
+      }
     ]);
   }
 
@@ -311,7 +313,8 @@ function App() {
 
     const preparedOptions = options.map(option => ({
       duration_days: Number(option.duration_days),
-      price: Number(option.price)
+      price_usdt: Number(option.price_usdt),
+      price_rub: Number(option.price_rub)
     }));
 
     if (
@@ -319,8 +322,10 @@ function App() {
       preparedOptions.some(option =>
         !Number.isInteger(option.duration_days) ||
         option.duration_days < 1 ||
-        !Number.isFinite(option.price) ||
-        option.price < 0
+        !Number.isFinite(option.price_usdt) ||
+        option.price_usdt <= 0 ||
+        !Number.isFinite(option.price_rub) ||
+        option.price_rub <= 0
       )
     ) {
       setMessage("Проверь сроки и цены аренды.");
@@ -355,13 +360,18 @@ function App() {
         throw new Error(data.error || "Не удалось сохранить подарок");
       }
 
-      setMessage(editingId ? "Подарок обновлён!" : "Подарок добавлен!");
+      setMessage(
+        editingId ? "Подарок обновлён!" : "Подарок добавлен!"
+      );
+
       resetForm();
 
       await loadAdminListings();
       await loadListings();
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Ошибка сохранения");
+      setMessage(
+        e instanceof Error ? e.message : "Ошибка сохранения"
+      );
     } finally {
       setSaving(false);
     }
@@ -479,7 +489,9 @@ function App() {
             }}
           >
             <ShieldCheck size={18} />
-            {adminOpen ? "Закрыть админ-панель" : "Админ-панель"}
+            {adminOpen
+              ? "Закрыть админ-панель"
+              : "Админ-панель"}
           </button>
         </div>
       )}
@@ -504,7 +516,11 @@ function App() {
                 <button
                   key={id}
                   type="button"
-                  className={giftCategory === id ? "category active" : "category"}
+                  className={
+                    giftCategory === id
+                      ? "category active"
+                      : "category"
+                  }
                   onClick={() => {
                     setGiftCategory(id);
                     resetForm();
@@ -516,7 +532,9 @@ function App() {
             </div>
 
             <h3>
-              {editingId ? "Редактировать подарок" : "Добавить подарок"}
+              {editingId
+                ? "Редактировать подарок"
+                : "Добавить подарок"}
             </h3>
 
             <label>
@@ -542,7 +560,9 @@ function App() {
               onChange={e => setDescription(e.target.value)}
             />
 
-            <label>Ссылка на изображение</label>
+            <label>
+              Прямая ссылка на фото / GIF / видео (MP4, WebM)
+            </label>
             <input
               className="admin-input"
               placeholder="https://..."
@@ -552,7 +572,10 @@ function App() {
 
             {imageUrl && (
               <div className="detail-image">
-                <img src={imageUrl} alt="Предпросмотр подарка" />
+                <GiftMedia
+                  url={imageUrl}
+                  title="Предпросмотр подарка"
+                />
               </div>
             )}
 
@@ -572,18 +595,35 @@ function App() {
                   min="1"
                   value={option.duration_days}
                   onChange={e =>
-                    updateOption(index, "duration_days", e.target.value)
+                    updateOption(
+                      index,
+                      "duration_days",
+                      e.target.value
+                    )
                   }
                 />
 
-                <label>Цена за весь срок (USD)</label>
+                <label>Цена за весь срок (USDT)</label>
                 <input
                   className="admin-input"
                   type="number"
-                  min="0"
-                  value={option.price}
+                  min="0.01"
+                  step="0.01"
+                  value={option.price_usdt}
                   onChange={e =>
-                    updateOption(index, "price", e.target.value)
+                    updateOption(index, "price_usdt", e.target.value)
+                  }
+                />
+
+                <label>Цена за весь срок (рубли)</label>
+                <input
+                  className="admin-input"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={option.price_rub}
+                  onChange={e =>
+                    updateOption(index, "price_rub", e.target.value)
                   }
                 />
 
@@ -612,7 +652,10 @@ function App() {
             </button>
 
             {editingId && (
-              <button className="secondary-button" onClick={resetForm}>
+              <button
+                className="secondary-button"
+                onClick={resetForm}
+              >
                 Отменить редактирование
               </button>
             )}
@@ -638,27 +681,54 @@ function App() {
             <div className="detail-card" key={item.id}>
               <div className="product-info">
                 {item.image_url && (
-                  <img
-                    src={item.image_url}
-                    alt={item.title}
-                    style={{
-                      width: "100%",
-                      maxHeight: 150,
-                      objectFit: "contain",
-                      borderRadius: 12
-                    }}
+                  <GiftMedia
+                    url={item.image_url}
+                    title={item.title}
                   />
                 )}
 
                 <strong>{item.title}</strong>
+
                 <span>
-                  {item.status === "APPROVED" ? "Опубликован" : "Скрыт"}
+                  {item.status === "APPROVED"
+                    ? "Опубликован"
+                    : "Скрыт"}
                 </span>
 
                 <span>
-                  {(item.rental_options || [])
-                    .map(o => `${o.duration_days} дн. — ${Number(o.price).toFixed(2)} USD`)
-                    .join(" / ")}
+                  {Array.from(
+                    new Set(
+                      (item.rental_options || []).map(
+                        o => o.duration_days
+                      )
+                    )
+                  ).map(days => {
+                    const same = (item.rental_options || []).filter(
+                      o => o.duration_days === days
+                    );
+
+                    const usdt = same.find(
+                      o =>
+                        String(o.currency || "USD").toUpperCase() !==
+                        "RUB"
+                    );
+
+                    const rub = same.find(
+                      o =>
+                        String(o.currency || "").toUpperCase() ===
+                        "RUB"
+                    );
+
+                    return `${days} дн. — ${
+                      usdt
+                        ? `${Number(usdt.price).toFixed(2)} USDT`
+                        : "—"
+                    } / ${
+                      rub
+                        ? `${Number(rub.price).toLocaleString("ru-RU")} ₽`
+                        : "—"
+                    }`;
+                  }).join(" · ")}
                 </span>
               </div>
 
@@ -677,7 +747,9 @@ function App() {
                   {item.status === "APPROVED"
                     ? <EyeOff size={16} />
                     : <Eye size={16} />}
-                  {item.status === "APPROVED" ? "Скрыть" : "Опубликовать"}
+                  {item.status === "APPROVED"
+                    ? "Скрыть"
+                    : "Опубликовать"}
                 </button>
 
                 <button
@@ -713,9 +785,14 @@ function App() {
           </button>
 
           <div className="detail-image">
-            {selected.image_url
-              ? <img src={selected.image_url} alt={selected.title} />
-              : <Gift size={65} />}
+            {selected.image_url ? (
+              <GiftMedia
+                url={selected.image_url}
+                title={selected.title}
+              />
+            ) : (
+              <Gift size={65} />
+            )}
           </div>
 
           <div className="detail-card">
@@ -724,12 +801,20 @@ function App() {
             <p>{selected.description}</p>
 
             <label>Валюта отображения</label>
+
             <div className="category-list">
-              {(["USD", "RUB", "TON"] as Currency[]).map(value => (
+              {(["USDT", "RUB"] as Currency[]).map(value => (
                 <button
                   key={value}
-                  className={currency === value ? "category active" : "category"}
-                  onClick={() => setCurrency(value)}
+                  className={
+                    currency === value
+                      ? "category active"
+                      : "category"
+                  }
+                  onClick={() => {
+                    setCurrency(value);
+                    setSelectedOption(null);
+                  }}
                 >
                   {value}
                 </button>
@@ -739,15 +824,25 @@ function App() {
             <label>Выбери срок аренды</label>
 
             {(selected.rental_options || [])
-              .filter(option => option.is_active !== 0)
+              .filter(
+                option =>
+                  option.is_active !== 0 &&
+                  (currency === "RUB"
+                    ? String(option.currency || "").toUpperCase() ===
+                      "RUB"
+                    : String(option.currency || "USD").toUpperCase() !==
+                      "RUB")
+              )
               .map(option => (
                 <button
-                  key={option.id || option.duration_days}
+                  key={`${option.id || option.duration_days}-${option.currency}`}
                   className="secondary-button"
                   onClick={() => setSelectedOption(option)}
                 >
-                  {option.duration_days} дней — {formatPrice(Number(option.price))}
-                  {selectedOption?.duration_days === option.duration_days
+                  {option.duration_days} дней —{" "}
+                  {formatPrice(Number(option.price))}
+                  {selectedOption?.id === option.id &&
+                  selectedOption?.duration_days === option.duration_days
                     ? " ✓"
                     : ""}
                 </button>
@@ -775,7 +870,8 @@ function App() {
             </button>
 
             <p className="small-note">
-              Условия аренды и подтверждение заявки согласовываются отдельно.
+              Условия аренды и подтверждение заявки согласовываются
+              отдельно.
             </p>
           </div>
 
@@ -788,7 +884,9 @@ function App() {
               <>
                 <section className="hero">
                   <div className="hero-content">
-                    <span className="eyebrow">EXCLUSIVE DIGITAL GOODS</span>
+                    <span className="eyebrow">
+                      EXCLUSIVE DIGITAL GOODS
+                    </span>
                     <h1>
                       Твой мир
                       <br />
@@ -823,7 +921,6 @@ function App() {
                       key={item.id}
                       item={item}
                       currency={currency}
-                      rates={rates}
                       onClick={() => {
                         setSelected(item);
                         setSelectedOption(null);
@@ -836,7 +933,9 @@ function App() {
                   <div className="empty-state">
                     <Gift size={36} />
                     <strong>
-                      {error ? "Каталог недоступен" : "Пока нет подарков"}
+                      {error
+                        ? "Каталог недоступен"
+                        : "Пока нет подарков"}
                     </strong>
                     <span>
                       {error || "Новые предложения появятся здесь."}
@@ -856,7 +955,9 @@ function App() {
               <>
                 <div className="section-heading">
                   <div>
-                    <span className="eyebrow">EXPLORE COLLECTIONS</span>
+                    <span className="eyebrow">
+                      EXPLORE COLLECTIONS
+                    </span>
                     <h2>Маркет</h2>
                   </div>
                 </div>
@@ -880,7 +981,9 @@ function App() {
                     <button
                       key={id}
                       className={
-                        category === id ? "category active" : "category"
+                        category === id
+                          ? "category active"
+                          : "category"
                       }
                       onClick={() => setCategory(id)}
                     >
@@ -898,7 +1001,6 @@ function App() {
                         key={item.id}
                         item={item}
                         currency={currency}
-                        rates={rates}
                         onClick={() => {
                           setSelected(item);
                           setSelectedOption(null);
@@ -945,7 +1047,9 @@ function App() {
 
                   <button
                     onClick={() =>
-                      setMessage("Правила сервиса будут опубликованы отдельно.")
+                      setMessage(
+                        "Правила сервиса будут опубликованы отдельно."
+                      )
                     }
                   >
                     <ShieldCheck size={19} />
@@ -966,7 +1070,9 @@ function App() {
 
           <nav className="bottom-nav">
             <button
-              className={tab === "market" ? "nav-item active" : "nav-item"}
+              className={
+                tab === "market" ? "nav-item active" : "nav-item"
+              }
               onClick={() => setTab("market")}
             >
               <ShoppingBag size={20} />
@@ -982,7 +1088,9 @@ function App() {
             </button>
 
             <button
-              className={tab === "profile" ? "nav-item active" : "nav-item"}
+              className={
+                tab === "profile" ? "nav-item active" : "nav-item"
+              }
               onClick={() => setTab("profile")}
             >
               <User size={20} />
@@ -995,41 +1103,84 @@ function App() {
   );
 }
 
+function GiftMedia({
+  url,
+  title
+}: {
+  url: string;
+  title: string;
+}) {
+  const cleanUrl = url.split(/[?#]/)[0].toLowerCase();
+  const isVideo = /\.(mp4|webm|mov|m4v)$/.test(cleanUrl);
+
+  if (isVideo) {
+    return (
+      <video
+        src={url}
+        autoPlay
+        muted
+        loop
+        playsInline
+        controls
+        aria-label={title}
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "contain"
+        }}
+      />
+    );
+  }
+
+  return (
+    <img
+      src={url}
+      alt={title}
+      style={{
+        width: "100%",
+        height: "100%",
+        objectFit: "contain"
+      }}
+    />
+  );
+}
+
 function ProductCard({
   item,
   onClick,
-  currency,
-  rates
+  currency
 }: {
   item: Listing;
   onClick: () => void;
   currency: Currency;
-  rates: Rates | null;
 }) {
   const prices = (item.rental_options || [])
-    .filter(option => option.is_active !== 0)
-    .map(option => option.price);
+    .filter(
+      option =>
+        option.is_active !== 0 &&
+        (currency === "RUB"
+          ? String(option.currency || "").toUpperCase() === "RUB"
+          : String(option.currency || "USD").toUpperCase() !== "RUB")
+    )
+    .map(option => Number(option.price));
 
-  const minPrice = prices.length
-    ? Math.min(...prices)
-    : item.price;
+  const minPrice = prices.length ? Math.min(...prices) : 0;
 
-  const displayedPrice = currency === "USD"
-    ? `${Number(minPrice).toFixed(2)} USD`
-    : !rates
-      ? "Курс загружается…"
-      : currency === "RUB"
-        ? `${(Number(minPrice) * rates.RUB).toLocaleString("ru-RU", {
-            maximumFractionDigits: 0
-          })} ₽`
-        : `${(Number(minPrice) * rates.TON).toFixed(3)} TON`;
+  const displayedPrice =
+    currency === "USDT"
+      ? `${minPrice.toFixed(2)} USDT`
+      : `${minPrice.toLocaleString("ru-RU", {
+          maximumFractionDigits: 2
+        })} ₽`;
 
   return (
     <button className="product-card" onClick={onClick}>
       <div className="product-image">
-        {item.image_url
-          ? <img src={item.image_url} alt={item.title} />
-          : <Gift size={43} />}
+        {item.image_url ? (
+          <GiftMedia url={item.image_url} title={item.title} />
+        ) : (
+          <Gift size={43} />
+        )}
         <span className="product-tag">NFT</span>
       </div>
 
