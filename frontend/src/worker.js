@@ -742,11 +742,14 @@ if (orderMatch && method === "PATCH") {
         error: "Not found"
       }, 404, cors);
 
-    } catch (error) {
-      return response({
-        error: "Internal server error",
-        details: String(error?.message || error)
-      }, 500, cors);
-    }
+} catch (error) {
+  console.error("PRESTIGE WORKER ERROR:", error);
+
+  return response({
+    error: "Internal server error",
+    details: String(error?.message || error),
+    stack: String(error?.stack || "")
+  }, 500, cors);
+}
   }
 };
