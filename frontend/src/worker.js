@@ -252,8 +252,6 @@ async function ensureOrdersTable(env) {
     )
   `).run();
 
-  // Совместимая схема для новой базы.
-  // Существующая таблица не пересоздаётся.
   await env.DB.prepare(`
     CREATE TABLE IF NOT EXISTS orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -485,15 +483,8 @@ export default {
           }, 400, cors);
         }
 
-        // ВАЖНО:
-        // Сначала создаём или находим пользователя в users.
-        // Это необходимо из-за обязательного orders.user_id.
-
         const dbUser = await getOrCreateUser(env, telegramUser);
         const amount = Number(option.price);
-
-        // Заполняем и старые обязательные поля,
-        // и новые поля, добавленные миграциями.
 
         const result = await env.DB.prepare(`
           INSERT INTO orders (
@@ -597,19 +588,39 @@ export default {
           }, 403, cors);
         }
 
-        // ADMIN ORDERS
+        // ADMIN ORDERS: PENDING / ACTIVE / HISTORY
 
         if (path === "/api/admin/orders" && method === "GET") {
           await ensureOrdersTable(env);
 
+          const view = url.searchParams.get("view") || "pending";
+
+          let where = "";
+
+          if (view === "pending") {
+            where = "WHERE status IN ('NEW', 'PENDING')";
+          } else if (view === "active") {
+            where = "WHERE status = 'ACCEPTED'";
+          } else if (view === "history") {
+            where = "WHERE status IN ('REJECTED', 'COMPLETED')";
+          } else if (view === "all") {
+            where = "";
+          } else {
+            return response({
+              error: "Invalid order view"
+            }, 400, cors);
+          }
+
           const result = await env.DB.prepare(`
             SELECT *
             FROM orders
+            ${where}
             ORDER BY created_at DESC
           `).all();
 
           return response({
             ok: true,
+            view,
             orders: result.results || []
           }, 200, cors);
         }
@@ -643,6 +654,43 @@ export default {
             return response({
               error: "Order not found"
             }, 404, cors);
+          }
+
+          // Не разрешаем завершать заявку, которая ещё не принята.
+          if (
+            status === "COMPLETED" &&
+            order.status !== "ACCEPTED"
+          ) {
+            return response({
+              error: "Only accepted orders can be completed"
+            }, 400, cors);
+          }
+
+          // Новую заявку можно принять или отклонить.
+          if (
+            ["NEW", "PENDING"].includes(order.status) &&
+            !["ACCEPTED", "REJECTED"].includes(status)
+          ) {
+            return response({
+              error: "Invalid status transition"
+            }, 400, cors);
+          }
+
+          // Принятую заявку можно завершить или отклонить.
+          if (
+            order.status === "ACCEPTED" &&
+            !["COMPLETED", "REJECTED"].includes(status)
+          ) {
+            return response({
+              error: "Invalid status transition"
+            }, 400, cors);
+          }
+
+          // Уже обработанные заявки нельзя менять повторно.
+          if (["REJECTED", "COMPLETED"].includes(order.status)) {
+            return response({
+              error: "Order is already closed"
+            }, 400, cors);
           }
 
           await env.DB.prepare(`
@@ -865,9 +913,6 @@ export default {
 
         if (editMatch && method === "DELETE") {
           const id = Number(editMatch[1]);
-
-          // Если на товар уже есть заявки, скрываем его,
-          // чтобы не нарушать связь orders.listing_id.
 
           const linkedOrder = await env.DB.prepare(`
             SELECT id
