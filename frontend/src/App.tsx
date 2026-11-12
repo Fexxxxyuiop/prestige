@@ -75,15 +75,6 @@ function App() {
   };
 
   const [currency, setCurrency] = useState<Currency>("USDT");
-
-  function formatPrice(amount: number) {
-    return currency === "USDT"
-      ? `${amount.toFixed(2)} USDT`
-      : `${amount.toLocaleString("ru-RU", {
-          maximumFractionDigits: 2
-        })} ₽`;
-  }
-
   const [tab, setTab] = useState("market");
   const [category, setCategory] = useState("all");
   const [search, setSearch] = useState("");
@@ -97,9 +88,13 @@ function App() {
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminListings, setAdminListings] = useState<Listing[]>([]);
   const [adminOrders, setAdminOrders] = useState<Order[]>([]);
-const [ordersLoading, setOrdersLoading] = useState(false);
-  const [debugInfo, setDebugInfo] = useState("Проверяем приложение...");
+  const [myOrders, setMyOrders] = useState<Order[]>([]);
 
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [myOrdersLoading, setMyOrdersLoading] = useState(false);
+  const [orderSubmitting, setOrderSubmitting] = useState(false);
+
+  const [debugInfo, setDebugInfo] = useState("Проверяем приложение...");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -116,6 +111,44 @@ const [ordersLoading, setOrdersLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+
+  function formatPrice(amount: number) {
+    return currency === "USDT"
+      ? `${amount.toFixed(2)} USDT`
+      : `${amount.toLocaleString("ru-RU", {
+          maximumFractionDigits: 2
+        })} ₽`;
+  }
+
+  function durationLabel(days: number, premium = false) {
+    if (premium) {
+      if (days === 90) return "3 месяца";
+      if (days === 180) return "6 месяцев";
+      if (days === 365) return "12 месяцев";
+    }
+
+    return `${days} дн.`;
+  }
+
+  function statusLabel(status: string) {
+    switch (status) {
+      case "NEW": return "Новая";
+      case "ACCEPTED": return "Принята";
+      case "REJECTED": return "Отклонена";
+      case "COMPLETED": return "Завершена";
+      default: return status;
+    }
+  }
+
+  function formatDate(value: string) {
+    if (!value) return "—";
+
+    const date = new Date(value.replace(" ", "T") + "Z");
+
+    if (Number.isNaN(date.getTime())) return value;
+
+    return date.toLocaleString("ru-RU");
+  }
 
   useEffect(() => {
     window.Telegram?.WebApp?.ready();
@@ -169,19 +202,12 @@ const [ordersLoading, setOrdersLoading] = useState(false);
         headers
       });
 
-      const raw = await response.text();
-      let data: any = {};
-
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        data = { error: raw };
-      }
+      const data = await response.json();
 
       if (!response.ok) {
         setIsAdmin(false);
         setDebugInfo(
-          `Доступ не подтверждён: HTTP ${response.status} — ${data.error || "ошибка"}`
+          `Доступ не подтверждён: HTTP ${response.status}`
         );
         return;
       }
@@ -192,7 +218,9 @@ const [ordersLoading, setOrdersLoading] = useState(false);
     } catch (e) {
       setIsAdmin(false);
       setDebugInfo(
-        `Ошибка соединения: ${e instanceof Error ? e.message : String(e)}`
+        `Ошибка соединения: ${
+          e instanceof Error ? e.message : String(e)
+        }`
       );
     }
   }
@@ -202,84 +230,153 @@ const [ordersLoading, setOrdersLoading] = useState(false);
       setDebugInfo("Нет данных Telegram для авторизации");
       return;
     }
-    async function loadAdminOrders() {
-  setOrdersLoading(true);
-
-  try {
-    const response = await fetch(`${API}/api/admin/orders`, {
-      headers
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || "Не удалось загрузить заявки");
-    }
-
-    setAdminOrders(Array.isArray(data.orders) ? data.orders : []);
-  } catch (e) {
-    setMessage(
-      e instanceof Error ? e.message : "Ошибка загрузки заявок"
-    );
-  } finally {
-    setOrdersLoading(false);
-  }
-}
-
-async function updateOrderStatus(
-  id: number,
-  status: "ACCEPTED" | "REJECTED" | "COMPLETED"
-) {
-  try {
-    const response = await fetch(`${API}/api/admin/orders/${id}`, {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ status })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || "Не удалось изменить заявку");
-    }
-
-    setMessage("Статус заявки обновлён");
-    await loadAdminOrders();
-  } catch (e) {
-    setMessage(
-      e instanceof Error ? e.message : "Ошибка обновления заявки"
-    );
-  }
-}
 
     try {
       const response = await fetch(`${API}/api/admin/listings`, {
         headers
       });
 
-      const raw = await response.text();
-      let data: any = {};
-
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        data = { error: raw };
-      }
+      const data = await response.json();
 
       if (!response.ok) {
-        setDebugInfo(
-          `Ошибка админ-панели HTTP ${response.status}: ${data.error || "Неизвестная ошибка"}`
-        );
-        return;
+        throw new Error(data.error || "Ошибка загрузки товаров");
       }
 
       setAdminListings(data.listings || []);
       setIsAdmin(true);
-      setDebugInfo("Администратор подтверждён");
     } catch (e) {
-      setDebugInfo(
-        `Ошибка запроса: ${e instanceof Error ? e.message : String(e)}`
+      setMessage(
+        e instanceof Error ? e.message : "Ошибка загрузки товаров"
       );
+    }
+  }
+
+  async function loadAdminOrders() {
+    setOrdersLoading(true);
+
+    try {
+      const response = await fetch(`${API}/api/admin/orders`, {
+        headers
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Не удалось загрузить заявки");
+      }
+
+      setAdminOrders(Array.isArray(data.orders) ? data.orders : []);
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : "Ошибка загрузки заявок"
+      );
+    } finally {
+      setOrdersLoading(false);
+    }
+  }
+
+  async function loadMyOrders() {
+    if (!initData) {
+      setMessage("Открой приложение через Telegram, чтобы увидеть заявки.");
+      return;
+    }
+
+    setMyOrdersLoading(true);
+
+    try {
+      const response = await fetch(`${API}/api/orders`, {
+        headers
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Не удалось загрузить ваши заявки");
+      }
+
+      setMyOrders(Array.isArray(data.orders) ? data.orders : []);
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : "Ошибка загрузки заявок"
+      );
+    } finally {
+      setMyOrdersLoading(false);
+    }
+  }
+
+  async function updateOrderStatus(
+    id: number,
+    status: "ACCEPTED" | "REJECTED" | "COMPLETED"
+  ) {
+    try {
+      const response = await fetch(`${API}/api/admin/orders/${id}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ status })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Не удалось изменить заявку");
+      }
+
+      setMessage("Статус заявки обновлён");
+      await loadAdminOrders();
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : "Ошибка обновления заявки"
+      );
+    }
+  }
+
+  async function createOrder() {
+    if (!selected || !selectedOption) {
+      setMessage("Сначала выбери срок.");
+      return;
+    }
+
+    if (!initData) {
+      setMessage("Открой магазин через Telegram, чтобы отправить заявку.");
+      return;
+    }
+
+    setOrderSubmitting(true);
+    setMessage("");
+
+    try {
+      const optionCurrency =
+        String(selectedOption.currency || currency).toUpperCase();
+
+      const orderCurrency = optionCurrency === "RUB" ? "RUB" : "USDT";
+
+      const response = await fetch(`${API}/api/orders`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          listing_id: selected.id,
+          duration_days: selectedOption.duration_days,
+          currency: orderCurrency
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Не удалось отправить заявку");
+      }
+
+      setMessage(
+        `Заявка №${data.order_id} отправлена администрации.`
+      );
+
+      void loadMyOrders();
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : "Ошибка отправки заявки"
+      );
+    } finally {
+      setOrderSubmitting(false);
     }
   }
 
@@ -314,16 +411,6 @@ async function updateOrderStatus(
     setDescription("");
     setImageUrl("");
     setOptions(defaultOptions(giftCategory));
-  }
-
-  function durationLabel(days: number, premium = false) {
-    if (premium) {
-      if (days === 90) return "3 месяца";
-      if (days === 180) return "6 месяцев";
-      if (days === 365) return "12 месяцев";
-    }
-
-    return `${days} дн.`;
   }
 
   function editListing(item: Listing) {
@@ -540,6 +627,11 @@ async function updateOrderStatus(
     }
   }
 
+  function openProfile() {
+    setTab("profile");
+    void loadMyOrders();
+  }
+
   const filteredItems = items.filter(item => {
     const matchesSearch = item.title
       .toLowerCase()
@@ -579,11 +671,9 @@ async function updateOrderStatus(
               setSelected(null);
 
               if (next) {
-  await loadAdminListings();
-  await loadAdminOrders();
-}
-                
-              
+                await loadAdminListings();
+                await loadAdminOrders();
+              }
             }}
           >
             <ShieldCheck size={18} />
@@ -603,71 +693,94 @@ async function updateOrderStatus(
             </div>
             <ShieldCheck size={25} />
           </div>
-           <div className="section-heading">
-  <div>
-    <span className="eyebrow">ORDERS</span>
-    <h2>Заявки пользователей</h2>
-  </div>
 
-  <button
-    className="text-button"
-    onClick={loadAdminOrders}
-  >
-    <RefreshCw size={16} />
-    Обновить
-  </button>
-</div>
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">ORDERS</span>
+              <h2>Заявки пользователей</h2>
+            </div>
 
-{ordersLoading && (
-  <div className="empty-state">Загружаем заявки...</div>
-)}
+            <button
+              className="text-button"
+              onClick={loadAdminOrders}
+            >
+              <RefreshCw size={16} />
+              Обновить
+            </button>
+          </div>
 
-{!ordersLoading && adminOrders.length === 0 && (
-  <div className="empty-state">
-    Пока заявок нет.
-  </div>
-)}
+          {ordersLoading && (
+            <div className="empty-state">Загружаем заявки...</div>
+          )}
 
-{adminOrders.map(order => (
-  <div className="detail-card" key={order.id}>
-    <h3>Заявка №{order.id}</h3>
+          {!ordersLoading && adminOrders.length === 0 && (
+            <div className="empty-state">
+              Пока заявок нет.
+            </div>
+          )}
 
-    <p><b>Товар:</b> {order.listing_title}</p>
-    <p><b>Покупатель:</b> {order.first_name || "Пользователь"}</p>
-    <p><b>Username:</b> {order.username ? `@${order.username}` : "Не указан"}</p>
-    <p><b>Telegram ID:</b> {order.user_telegram_id}</p>
-    <p><b>Срок:</b> {order.duration_days} дней</p>
-    <p><b>Сумма:</b> {order.amount} {order.currency}</p>
-    <p><b>Статус:</b> {order.status}</p>
+          {adminOrders.map(order => (
+            <div className="detail-card" key={order.id}>
+              <h3>Заявка №{order.id}</h3>
 
-    {order.status === "NEW" && (
-      <div className="category-list">
-        <button
-          className="primary-button"
-          onClick={() => updateOrderStatus(order.id, "ACCEPTED")}
-        >
-          Принять
-        </button>
+              <p><b>Товар:</b> {order.listing_title}</p>
+              <p><b>Покупатель:</b> {order.first_name || "Пользователь"}</p>
+              <p>
+                <b>Username:</b>{" "}
+                {order.username ? `@${order.username}` : "Не указан"}
+              </p>
+              <p><b>Telegram ID:</b> {order.user_telegram_id}</p>
+              <p><b>Срок:</b> {order.duration_days} дней</p>
+              <p><b>Сумма:</b> {order.amount} {order.currency}</p>
+              <p><b>Статус:</b> {statusLabel(order.status)}</p>
+              <p><b>Дата:</b> {formatDate(order.created_at)}</p>
 
-        <button
-          className="secondary-button"
-          onClick={() => updateOrderStatus(order.id, "REJECTED")}
-        >
-          Отклонить
-        </button>
-      </div>
-    )}
+              {order.status === "NEW" && (
+                <div className="category-list">
+                  <button
+                    className="primary-button"
+                    onClick={() =>
+                      updateOrderStatus(order.id, "ACCEPTED")
+                    }
+                  >
+                    Принять
+                  </button>
 
-    {order.status === "ACCEPTED" && (
-      <button
-        className="primary-button"
-        onClick={() => updateOrderStatus(order.id, "COMPLETED")}
-      >
-        Завершить заявку
-      </button>
-    )}
-  </div>
-))}
+                  <button
+                    className="secondary-button"
+                    onClick={() =>
+                      updateOrderStatus(order.id, "REJECTED")
+                    }
+                  >
+                    Отклонить
+                  </button>
+                </div>
+              )}
+
+              {order.status === "ACCEPTED" && (
+                <div className="category-list">
+                  <button
+                    className="primary-button"
+                    onClick={() =>
+                      updateOrderStatus(order.id, "COMPLETED")
+                    }
+                  >
+                    Завершить заявку
+                  </button>
+
+                  <button
+                    className="secondary-button"
+                    onClick={() =>
+                      updateOrderStatus(order.id, "REJECTED")
+                    }
+                  >
+                    Отклонить
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+
           <div className="detail-card">
             <div className="category-list">
               {[
@@ -1052,18 +1165,16 @@ async function updateOrderStatus(
 
             <button
               className="primary-button"
-              disabled={!selectedOption}
-              onClick={() => {
-                setMessage(
-                  "Заявка будет согласована с администрацией."
-                );
-              }}
+              disabled={!selectedOption || orderSubmitting}
+              onClick={createOrder}
             >
-              Оставить заявку <ChevronRight size={18} />
+              {orderSubmitting ? "Отправляем..." : "Оставить заявку"}
+              <ChevronRight size={18} />
             </button>
 
             <p className="small-note">
-              Условия заказа и подтверждение заявки согласовываются отдельно.
+              После отправки заявка поступит администрации для согласования.
+              Оплата и выполнение заказа согласовываются отдельно.
             </p>
           </div>
 
@@ -1225,6 +1336,44 @@ async function updateOrderStatus(
                   <ShieldCheck size={21} />
                 </div>
 
+                <div className="section-heading">
+                  <h2>Мои заявки</h2>
+
+                  <button
+                    className="text-button"
+                    onClick={loadMyOrders}
+                  >
+                    <RefreshCw size={15} />
+                    Обновить
+                  </button>
+                </div>
+
+                {myOrdersLoading && (
+                  <div className="empty-state">
+                    Загружаем ваши заявки...
+                  </div>
+                )}
+
+                {!myOrdersLoading && myOrders.length === 0 && (
+                  <div className="empty-state">
+                    У вас пока нет заявок.
+                  </div>
+                )}
+
+                {myOrders.map(order => (
+                  <div className="detail-card" key={order.id}>
+                    <h3>Заявка №{order.id}</h3>
+                    <p><b>Товар:</b> {order.listing_title}</p>
+                    <p><b>Срок:</b> {durationLabel(
+                      order.duration_days,
+                      order.category === "premium"
+                    )}</p>
+                    <p><b>Сумма:</b> {order.amount} {order.currency}</p>
+                    <p><b>Статус:</b> {statusLabel(order.status)}</p>
+                    <p><b>Дата:</b> {formatDate(order.created_at)}</p>
+                  </div>
+                ))}
+
                 <div className="profile-menu">
                   <button onClick={openSupport}>
                     <Headphones size={19} />
@@ -1278,7 +1427,7 @@ async function updateOrderStatus(
               className={
                 tab === "profile" ? "nav-item active" : "nav-item"
               }
-              onClick={() => setTab("profile")}
+              onClick={openProfile}
             >
               <User size={20} />
               <span>Профиль</span>
