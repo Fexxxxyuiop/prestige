@@ -1,3 +1,4 @@
+
 const allowedOrigins = [
   "https://fexxxxyuiop.github.io",
   "https://web.telegram.org",
@@ -6,10 +7,8 @@ const allowedOrigins = [
 
 function getCorsHeaders(request) {
   const origin = request.headers.get("Origin") || "";
-  const allowed = allowedOrigins.includes(origin);
-
   return {
-    "Access-Control-Allow-Origin": allowed
+    "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
       ? origin
       : "https://fexxxxyuiop.github.io",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
@@ -23,39 +22,61 @@ function response(data, status = 200, headers = {}) {
     status,
     headers: {
       ...headers,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json; charset=utf-8"
     }
   });
 }
 
-async function getRates() {
-  const [rubResponse, tonResponse] = await Promise.all([
-    fetch("https://open.er-api.com/v6/latest/USD", {
-      cf: { cacheTtl: 300, cacheEverything: true }
-    }),
-    fetch(
-      "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd",
-      { cf: { cacheTtl: 300, cacheEverything: true } }
-    )
-  ]);
+// EXCHANGE RATES
 
-  if (!rubResponse.ok || !tonResponse.ok) {
-    throw new Error("Exchange rate provider unavailable");
+async function getRates() {
+  const rubResponse = await fetch(
+    "https://open.er-api.com/v6/latest/USD"
+  );
+
+  if (!rubResponse.ok) {
+    throw new Error("RUB rate provider unavailable");
   }
 
   const rubData = await rubResponse.json();
-  const tonData = await tonResponse.json();
-
   const rub = Number(rubData?.rates?.RUB);
-  const tonUsd = Number(tonData?.["the-open-network"]?.usd);
 
-  if (
-    !Number.isFinite(rub) ||
-    rub <= 0 ||
-    !Number.isFinite(tonUsd) ||
-    tonUsd <= 0
-  ) {
-    throw new Error("Invalid exchange rates");
+  if (!Number.isFinite(rub) || rub <= 0) {
+    throw new Error("Invalid RUB rate");
+  }
+
+  let tonUsd = 0;
+
+  try {
+    const tonResponse = await fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd"
+    );
+
+    if (tonResponse.ok) {
+      const tonData = await tonResponse.json();
+      tonUsd = Number(tonData?.["the-open-network"]?.usd);
+    }
+  } catch (error) {
+    tonUsd = 0;
+  }
+
+  if (!Number.isFinite(tonUsd) || tonUsd <= 0) {
+    try {
+      const backupResponse = await fetch(
+        "https://min-api.cryptocompare.com/data/price?fsym=TON&tsyms=USD"
+      );
+
+      if (backupResponse.ok) {
+        const backupData = await backupResponse.json();
+        tonUsd = Number(backupData?.USD);
+      }
+    } catch (error) {
+      tonUsd = 0;
+    }
+  }
+
+  if (!Number.isFinite(tonUsd) || tonUsd <= 0) {
+    throw new Error("TON rate providers unavailable");
   }
 
   return {
@@ -65,17 +86,23 @@ async function getRates() {
   };
 }
 
+// TELEGRAM AUTH
+
 async function verifyTelegram(initData, botToken) {
   if (!initData || !botToken) return null;
 
   const params = new URLSearchParams(initData);
   const hash = params.get("hash");
+
   if (!hash) return null;
 
   params.delete("hash");
 
   const authDate = Number(params.get("auth_date"));
-  if (!authDate || Date.now() / 1000 - authDate > 86400) return null;
+
+  if (!authDate || Date.now() / 1000 - authDate > 86400) {
+    return null;
+  }
 
   const checkString = [...params.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
@@ -138,6 +165,8 @@ async function getAdmin(request, env) {
   return admins.includes(String(user.id)) ? user : null;
 }
 
+// ADMIN AUDIT
+
 async function audit(env, adminId, action, details = "") {
   await env.DB.prepare(`
     INSERT INTO admin_audit
@@ -145,6 +174,8 @@ async function audit(env, adminId, action, details = "") {
     VALUES (?, ?, ?)
   `).bind(String(adminId), action, details).run();
 }
+
+// DATABASE MIGRATION
 
 let currencyMigrationPromise = null;
 
@@ -186,6 +217,8 @@ async function ensureCurrencyColumn(env) {
   return currencyMigrationPromise;
 }
 
+// LISTINGS
+
 async function getListing(env, id) {
   const listing = await env.DB.prepare(
     "SELECT * FROM listings WHERE id = ?"
@@ -206,12 +239,15 @@ async function getListing(env, id) {
   };
 }
 
+// RENTAL OPTIONS
+
 async function saveOptions(env, listingId, options) {
   if (!Array.isArray(options)) return;
 
   for (const option of options) {
     const days = Number(option.duration_days);
     const price = Number(option.price);
+    const currency = String(option.currency || "USD").toUpperCase();
 
     if (!Number.isInteger(days) || days < 1 || days > 3650) {
       throw new Error("Invalid rental duration");
@@ -221,12 +257,7 @@ async function saveOptions(env, listingId, options) {
       throw new Error("Invalid rental price");
     }
 
-    if (
-      option.currency &&
-      !["USD", "RUB", "TON"].includes(
-        String(option.currency).toUpperCase()
-      )
-    ) {
+    if (!["USD", "RUB", "TON"].includes(currency)) {
       throw new Error("Invalid currency");
     }
   }
@@ -238,14 +269,17 @@ async function saveOptions(env, listingId, options) {
   for (const option of options) {
     const days = Number(option.duration_days);
     const price = Number(option.price);
+    const currency = String(option.currency || "USD").toUpperCase();
 
     await env.DB.prepare(`
       INSERT INTO rental_options
       (listing_id, duration_days, price, currency, is_active)
-      VALUES (?, ?, ?, 'USD', 1)
-    `).bind(listingId, days, price).run();
+      VALUES (?, ?, ?, ?, 1)
+    `).bind(listingId, days, price, currency).run();
   }
 }
+
+// MAIN WORKER
 
 export default {
   async fetch(request, env) {
@@ -262,6 +296,8 @@ export default {
     }
 
     try {
+      // HEALTH CHECK
+
       if (path === "/health") {
         return response({
           ok: true,
@@ -276,9 +312,12 @@ export default {
         }, 200, cors);
       }
 
+      // EXCHANGE RATES
+
       if (path === "/api/rates" && method === "GET") {
         try {
           const rates = await getRates();
+
           return response({
             ok: true,
             ...rates
@@ -286,15 +325,19 @@ export default {
             ...cors,
             "Cache-Control": "public, max-age=300"
           });
-          
-             } catch (error) {
+        } catch (error) {
           return response({
             ok: false,
             error: String(error?.message || error)
           }, 503, cors);
         }
+      }
+
+      // DATABASE
 
       await ensureCurrencyColumn(env);
+
+      // PUBLIC LISTINGS
 
       if (path === "/api/listings" && method === "GET") {
         const result = await env.DB.prepare(`
@@ -316,10 +359,15 @@ export default {
         }, 200, cors);
       }
 
+      // SINGLE LISTING
+
       const listingMatch = path.match(/^\/api\/listings\/(\d+)$/);
 
       if (listingMatch && method === "GET") {
-        const item = await getListing(env, Number(listingMatch[1]));
+        const item = await getListing(
+          env,
+          Number(listingMatch[1])
+        );
 
         if (!item || item.status !== "APPROVED") {
           return response({
@@ -333,6 +381,8 @@ export default {
         }, 200, cors);
       }
 
+      // ADMIN ROUTES
+
       if (path.startsWith("/api/admin/")) {
         const admin = await getAdmin(request, env);
 
@@ -342,7 +392,12 @@ export default {
           }, 403, cors);
         }
 
-        if (path === "/api/admin/listings" && method === "GET") {
+        // ADMIN LISTINGS
+
+        if (
+          path === "/api/admin/listings" &&
+          method === "GET"
+        ) {
           const result = await env.DB.prepare(`
             SELECT * FROM listings
             ORDER BY created_at DESC
@@ -361,7 +416,12 @@ export default {
           }, 200, cors);
         }
 
-        if (path === "/api/admin/listings" && method === "POST") {
+        // CREATE LISTING
+
+        if (
+          path === "/api/admin/listings" &&
+          method === "POST"
+        ) {
           const body = await request.json();
 
           const title = String(body.title || "").trim();
@@ -410,6 +470,8 @@ export default {
           }, 201, cors);
         }
 
+        // EDIT LISTING
+
         const editMatch = path.match(
           /^\/api\/admin\/listings\/(\d+)$/
         );
@@ -426,16 +488,22 @@ export default {
             }, 404, cors);
           }
 
-          const title = String(body.title ?? existing.title).trim();
+          const title = String(
+            body.title ?? existing.title
+          ).trim();
+
           const description = String(
             body.description ?? existing.description ?? ""
           );
+
           const category = String(
             body.category ?? existing.category
           );
+
           const imageUrl = String(
             body.image_url ?? existing.image_url ?? ""
           );
+
           const status = body.status ?? existing.status;
 
           if (!["APPROVED", "PENDING", "HIDDEN"].includes(status)) {
@@ -468,7 +536,11 @@ export default {
               }, 400, cors);
             }
 
-            await saveOptions(env, id, body.rental_options);
+            await saveOptions(
+              env,
+              id,
+              body.rental_options
+            );
           }
 
           await audit(env, admin.id, "edit_listing", String(id));
@@ -478,6 +550,8 @@ export default {
             listing: await getListing(env, id)
           }, 200, cors);
         }
+
+        // DELETE LISTING
 
         if (editMatch && method === "DELETE") {
           const id = Number(editMatch[1]);
@@ -510,7 +584,7 @@ export default {
     } catch (error) {
       return response({
         error: "Internal server error",
-        details: error?.message || "Unknown error"
+        details: String(error?.message || error)
       }, 500, cors);
     }
   }
