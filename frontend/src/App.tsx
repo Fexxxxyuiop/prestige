@@ -26,6 +26,7 @@ declare global {
 }
 
 type Currency = "USDT" | "RUB";
+type OrderView = "pending" | "active" | "history";
 
 type RentalOption = {
   id?: number;
@@ -88,6 +89,7 @@ function App() {
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminListings, setAdminListings] = useState<Listing[]>([]);
   const [adminOrders, setAdminOrders] = useState<Order[]>([]);
+  const [orderView, setOrderView] = useState<OrderView>("pending");
   const [myOrders, setMyOrders] = useState<Order[]>([]);
 
   const [ordersLoading, setOrdersLoading] = useState(false);
@@ -132,7 +134,8 @@ function App() {
 
   function statusLabel(status: string) {
     switch (status) {
-      case "NEW": return "Новая";
+      case "NEW":
+      case "PENDING": return "Ожидает решения";
       case "ACCEPTED": return "Принята";
       case "REJECTED": return "Отклонена";
       case "COMPLETED": return "Завершена";
@@ -251,13 +254,14 @@ function App() {
     }
   }
 
-  async function loadAdminOrders() {
+  async function loadAdminOrders(view: OrderView = orderView) {
     setOrdersLoading(true);
 
     try {
-      const response = await fetch(`${API}/api/admin/orders`, {
-        headers
-      });
+      const response = await fetch(
+        `${API}/api/admin/orders?view=${view}`,
+        { headers }
+      );
 
       const data = await response.json();
 
@@ -273,6 +277,11 @@ function App() {
     } finally {
       setOrdersLoading(false);
     }
+  }
+
+  async function changeOrderView(view: OrderView) {
+    setOrderView(view);
+    await loadAdminOrders(view);
   }
 
   async function loadMyOrders() {
@@ -321,8 +330,18 @@ function App() {
         throw new Error(data.error || "Не удалось изменить заявку");
       }
 
-      setMessage("Статус заявки обновлён");
-      await loadAdminOrders();
+      // Убираем заявку из текущего раздела сразу после успешного ответа.
+      setAdminOrders(current =>
+        current.filter(order => order.id !== id)
+      );
+
+      setMessage(
+        status === "ACCEPTED"
+          ? `Заявка №${id} принята и перенесена в активные.`
+          : status === "REJECTED"
+            ? `Заявка №${id} отклонена и перенесена в историю.`
+            : `Заявка №${id} завершена и перенесена в историю.`
+      );
     } catch (e) {
       setMessage(
         e instanceof Error ? e.message : "Ошибка обновления заявки"
@@ -672,7 +691,8 @@ function App() {
 
               if (next) {
                 await loadAdminListings();
-                await loadAdminOrders();
+                await loadAdminOrders("pending");
+                setOrderView("pending");
               }
             }}
           >
@@ -702,10 +722,33 @@ function App() {
 
             <button
               className="text-button"
-              onClick={loadAdminOrders}
+              onClick={() => loadAdminOrders()}
             >
               <RefreshCw size={16} />
               Обновить
+            </button>
+          </div>
+
+          <div className="category-list">
+            <button
+              className={orderView === "pending" ? "category active" : "category"}
+              onClick={() => changeOrderView("pending")}
+            >
+              Новые
+            </button>
+
+            <button
+              className={orderView === "active" ? "category active" : "category"}
+              onClick={() => changeOrderView("active")}
+            >
+              Активные
+            </button>
+
+            <button
+              className={orderView === "history" ? "category active" : "category"}
+              onClick={() => changeOrderView("history")}
+            >
+              История
             </button>
           </div>
 
@@ -715,7 +758,11 @@ function App() {
 
           {!ordersLoading && adminOrders.length === 0 && (
             <div className="empty-state">
-              Пока заявок нет.
+              {orderView === "pending"
+                ? "Новых заявок пока нет."
+                : orderView === "active"
+                  ? "Активных заявок пока нет."
+                  : "История заявок пока пуста."}
             </div>
           )}
 
@@ -730,12 +777,15 @@ function App() {
                 {order.username ? `@${order.username}` : "Не указан"}
               </p>
               <p><b>Telegram ID:</b> {order.user_telegram_id}</p>
-              <p><b>Срок:</b> {order.duration_days} дней</p>
+              <p><b>Срок:</b> {durationLabel(
+                order.duration_days,
+                order.category === "premium"
+              )}</p>
               <p><b>Сумма:</b> {order.amount} {order.currency}</p>
               <p><b>Статус:</b> {statusLabel(order.status)}</p>
               <p><b>Дата:</b> {formatDate(order.created_at)}</p>
 
-              {order.status === "NEW" && (
+              {(order.status === "NEW" || order.status === "PENDING") && (
                 <div className="category-list">
                   <button
                     className="primary-button"
@@ -1554,3 +1604,4 @@ function ProductCard({
 }
 
 export default App;
+
