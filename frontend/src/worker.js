@@ -27,83 +27,6 @@ function response(data, status = 200, headers = {}) {
   });
 }
 
-// EXCHANGE RATES
-
-async function getRates() {
-  const rubResponse = await fetch(
-    "https://open.er-api.com/v6/latest/USD"
-  );
-
-  if (!rubResponse.ok) {
-    throw new Error("RUB rate provider unavailable");
-  }
-
-  const rubData = await rubResponse.json();
-  const rub = Number(rubData?.rates?.RUB);
-
-  if (!Number.isFinite(rub) || rub <= 0) {
-    throw new Error("Invalid RUB rate");
-  }
-
-  const providers = [
-    async () => {
-      const r = await fetch(
-        "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd",
-        { headers: { Accept: "application/json" } }
-      );
-      if (!r.ok) throw new Error("CoinGecko HTTP " + r.status);
-      const d = await r.json();
-      return Number(d?.["the-open-network"]?.usd);
-    },
-    async () => {
-      const r = await fetch(
-        "https://api.coinpaprika.com/v1/tickers/ton-toncoin"
-      );
-      if (!r.ok) throw new Error("CoinPaprika HTTP " + r.status);
-      const d = await r.json();
-      return Number(d?.quotes?.USD?.price);
-    },
-    async () => {
-      const r = await fetch(
-        "https://api.coincap.io/v2/assets/toncoin"
-      );
-      if (!r.ok) throw new Error("CoinCap HTTP " + r.status);
-      const d = await r.json();
-      return Number(d?.data?.priceUsd);
-    },
-    async () => {
-      const r = await fetch(
-        "https://min-api.cryptocompare.com/data/price?fsym=TON&tsyms=USD"
-      );
-      if (!r.ok) throw new Error("CryptoCompare HTTP " + r.status);
-      const d = await r.json();
-      return Number(d?.USD);
-    }
-  ];
-
-  const errors = [];
-
-  for (const provider of providers) {
-    try {
-      const tonUsd = await provider();
-
-      if (Number.isFinite(tonUsd) && tonUsd > 0) {
-        return {
-          RUB: rub,
-          TON: 1 / tonUsd,
-          updated_at: new Date().toISOString()
-        };
-      }
-    } catch (error) {
-      errors.push(String(error?.message || error));
-    }
-  }
-
-  throw new Error(
-    "TON providers unavailable: " + errors.join("; ")
-  );
-}
-
 // TELEGRAM AUTH
 
 async function verifyTelegram(initData, botToken) {
@@ -226,6 +149,16 @@ async function ensureCurrencyColumn(env) {
           if (!added) throw error;
         }
       }
+
+      // Старые USD считаем USDT
+      await env.DB.prepare(
+        "UPDATE rental_options SET currency = 'USDT' WHERE currency = 'USD'"
+      ).run();
+
+      // Старые TON больше не используются
+      await env.DB.prepare(
+        "DELETE FROM rental_options WHERE currency = 'TON'"
+      ).run();
     })().catch(error => {
       currencyMigrationPromise = null;
       throw error;
@@ -264,19 +197,18 @@ async function saveOptions(env, listingId, options) {
 
   for (const option of options) {
     const days = Number(option.duration_days);
-    const price = Number(option.price);
-    const currency = String(option.currency || "USD").toUpperCase();
+    const usdt = Number(option.price_usdt ?? option.price ?? 0);
+    const rub = Number(option.price_rub ?? 0);
 
     if (!Number.isInteger(days) || days < 1 || days > 3650) {
       throw new Error("Invalid rental duration");
     }
 
-    if (!Number.isFinite(price) || price < 0) {
+    if (
+      !Number.isFinite(usdt) || usdt <= 0 ||
+      !Number.isFinite(rub) || rub <= 0
+    ) {
       throw new Error("Invalid rental price");
-    }
-
-    if (!["USD", "RUB", "TON"].includes(currency)) {
-      throw new Error("Invalid currency");
     }
   }
 
@@ -286,14 +218,20 @@ async function saveOptions(env, listingId, options) {
 
   for (const option of options) {
     const days = Number(option.duration_days);
-    const price = Number(option.price);
-    const currency = String(option.currency || "USD").toUpperCase();
+    const usdt = Number(option.price_usdt ?? option.price ?? 0);
+    const rub = Number(option.price_rub ?? 0);
 
     await env.DB.prepare(`
       INSERT INTO rental_options
       (listing_id, duration_days, price, currency, is_active)
-      VALUES (?, ?, ?, ?, 1)
-    `).bind(listingId, days, price, currency).run();
+      VALUES (?, ?, ?, 'USDT', 1)
+    `).bind(listingId, days, usdt).run();
+
+    await env.DB.prepare(`
+      INSERT INTO rental_options
+      (listing_id, duration_days, price, currency, is_active)
+      VALUES (?, ?, ?, 'RUB', 1)
+    `).bind(listingId, days, rub).run();
   }
 }
 
@@ -328,27 +266,6 @@ export default {
           service: "Prestige Market API",
           status: "online"
         }, 200, cors);
-      }
-
-      // EXCHANGE RATES
-
-      if (path === "/api/rates" && method === "GET") {
-        try {
-          const rates = await getRates();
-
-          return response({
-            ok: true,
-            ...rates
-          }, 200, {
-            ...cors,
-            "Cache-Control": "public, max-age=300"
-          });
-        } catch (error) {
-          return response({
-            ok: false,
-            error: String(error?.message || error)
-          }, 503, cors);
-        }
       }
 
       // DATABASE
@@ -454,9 +371,11 @@ export default {
             }, 400, cors);
           }
 
-          const firstPrice = Number(options[0].price);
+          const firstPrice = Number(
+            options[0].price_usdt ?? options[0].price ?? 0
+          );
 
-          if (!Number.isFinite(firstPrice) || firstPrice < 0) {
+          if (!Number.isFinite(firstPrice) || firstPrice <= 0) {
             return response({
               error: "Invalid price"
             }, 400, cors);
