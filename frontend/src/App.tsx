@@ -485,13 +485,14 @@ function App() {
               {editingId ? "Редактировать подарок" : "Добавить подарок"}
             </h3>
 
-            <label>Название подарка</label>
-            <input
-              className="admin-input"
-              placeholder="Например: Precious Peach"
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-            />
+         <label>
+  {giftCategory === "gifts"
+    ? "Название подарка"
+    : giftCategory === "usernames"
+      ? "Юзернейм"
+      : "Номер телефона"}
+</label>
+      
 
             <label>Описание</label>
             <textarea
