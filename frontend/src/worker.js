@@ -40,8 +40,9 @@ async function verifyTelegram(initData, botToken) {
   params.delete("hash");
 
   const authDate = Number(params.get("auth_date"));
+  const now = Math.floor(Date.now() / 1000);
 
-  if (!authDate || Date.now() / 1000 - authDate > 86400) {
+  if (!authDate || authDate > now + 60 || now - authDate > 86400) {
     return null;
   }
 
@@ -94,8 +95,10 @@ async function verifyTelegram(initData, botToken) {
 }
 
 async function getAdmin(request, env) {
-  const initData = request.headers.get("X-Telegram-Init-Data");
-  const user = await verifyTelegram(initData, env.BOT_TOKEN);
+  const user = await verifyTelegram(
+    request.headers.get("X-Telegram-Init-Data"),
+    env.BOT_TOKEN
+  );
 
   if (!user?.id) return null;
 
@@ -111,7 +114,7 @@ async function getAdmin(request, env) {
 async function audit(env, adminId, action, details = "") {
   await env.DB.prepare(`
     INSERT INTO admin_audit
-    (admin_telegram_id, action, details)
+      (admin_telegram_id, action, details)
     VALUES (?, ?, ?)
   `).bind(String(adminId), action, details).run();
 }
@@ -150,15 +153,16 @@ async function ensureCurrencyColumn(env) {
         }
       }
 
-      // Старые USD считаем USDT
-      await env.DB.prepare(
-        "UPDATE rental_options SET currency = 'USDT' WHERE currency = 'USD'"
-      ).run();
+      await env.DB.prepare(`
+        UPDATE rental_options
+        SET currency = 'USDT'
+        WHERE currency = 'USD'
+      `).run();
 
-      // Старые TON больше не используются
-      await env.DB.prepare(
-        "DELETE FROM rental_options WHERE currency = 'TON'"
-      ).run();
+      await env.DB.prepare(`
+        DELETE FROM rental_options
+        WHERE currency = 'TON'
+      `).run();
     })().catch(error => {
       currencyMigrationPromise = null;
       throw error;
@@ -223,55 +227,118 @@ async function saveOptions(env, listingId, options) {
 
     await env.DB.prepare(`
       INSERT INTO rental_options
-      (listing_id, duration_days, price, currency, is_active)
+        (listing_id, duration_days, price, currency, is_active)
       VALUES (?, ?, ?, 'USDT', 1)
     `).bind(listingId, days, usdt).run();
 
     await env.DB.prepare(`
       INSERT INTO rental_options
-      (listing_id, duration_days, price, currency, is_active)
+        (listing_id, duration_days, price, currency, is_active)
       VALUES (?, ?, ?, 'RUB', 1)
     `).bind(listingId, days, rub).run();
   }
 }
+
 // ORDERS SYSTEM
 
 async function ensureOrdersTable(env) {
   await env.DB.prepare(`
-    CREATE TABLE IF NOT EXISTS orders (
+    CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_telegram_id TEXT NOT NULL,
+      telegram_id TEXT NOT NULL UNIQUE,
       username TEXT,
       first_name TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run();
+
+  // Совместимая схема для новой базы.
+  // Существующая таблица не пересоздаётся.
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
       listing_id INTEGER NOT NULL,
-      listing_title TEXT NOT NULL,
-      category TEXT NOT NULL,
-      duration_days INTEGER NOT NULL,
-      currency TEXT NOT NULL,
-      amount REAL NOT NULL,
-      status TEXT NOT NULL DEFAULT 'NEW',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      total_price REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      user_telegram_id TEXT,
+      username TEXT,
+      first_name TEXT,
+      listing_title TEXT,
+      category TEXT,
+      duration_days INTEGER DEFAULT 1,
+      currency TEXT DEFAULT 'USDT',
+      amount REAL DEFAULT 0,
+      updated_at TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (listing_id) REFERENCES listings(id)
     )
   `).run();
 }
 
-async function sendTelegramMessage(env, chatId, message) {
-  if (!env.BOT_TOKEN || !chatId) return;
+// REGISTER / UPDATE USER
 
-  await fetch(
-    `https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: message
-      })
-    }
-  );
+async function getOrCreateUser(env, telegramUser) {
+  const telegramId = String(telegramUser.id);
+  const username = String(telegramUser.username || "");
+  const firstName = String(telegramUser.first_name || "");
+
+  await env.DB.prepare(`
+    INSERT INTO users (telegram_id, username, first_name)
+    VALUES (?, ?, ?)
+    ON CONFLICT(telegram_id) DO UPDATE SET
+      username = excluded.username,
+      first_name = excluded.first_name
+  `).bind(
+    telegramId,
+    username,
+    firstName
+  ).run();
+
+  const dbUser = await env.DB.prepare(`
+    SELECT id
+    FROM users
+    WHERE telegram_id = ?
+  `).bind(telegramId).first();
+
+  if (!dbUser?.id) {
+    throw new Error("Could not create or find user");
+  }
+
+  return {
+    id: Number(dbUser.id),
+    telegramId,
+    username,
+    firstName
+  };
+}
+
+// TELEGRAM NOTIFICATIONS
+
+async function sendTelegramMessage(env, chatId, message) {
+  if (!env.BOT_TOKEN || !chatId) return false;
+
+  try {
+    const result = await fetch(
+      `https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: message
+        })
+      }
+    );
+
+    return result.ok;
+  } catch (error) {
+    console.error("TELEGRAM NOTIFICATION ERROR:", error);
+    return false;
+  }
 }
 
 function escapeText(value) {
@@ -311,15 +378,14 @@ export default {
         }, 200, cors);
       }
 
-      // DATABASE
-
       await ensureCurrencyColumn(env);
 
       // PUBLIC LISTINGS
 
       if (path === "/api/listings" && method === "GET") {
         const result = await env.DB.prepare(`
-          SELECT * FROM listings
+          SELECT *
+          FROM listings
           WHERE status = 'APPROVED'
           ORDER BY created_at DESC
         `).all();
@@ -361,120 +427,164 @@ export default {
 
       // CREATE ORDER
 
-if (path === "/api/orders" && method === "POST") {
-  const user = await verifyTelegram(
-    request.headers.get("X-Telegram-Init-Data"),
-    env.BOT_TOKEN
-  );
+      if (path === "/api/orders" && method === "POST") {
+        const telegramUser = await verifyTelegram(
+          request.headers.get("X-Telegram-Init-Data"),
+          env.BOT_TOKEN
+        );
 
-  if (!user?.id) {
-    return response({ error: "Telegram authorization required" }, 401, cors);
-  }
+        if (!telegramUser?.id) {
+          return response({
+            error: "Telegram authorization required"
+          }, 401, cors);
+        }
 
-  await ensureOrdersTable(env);
+        await ensureOrdersTable(env);
 
-  const body = await request.json();
+        const body = await request.json();
 
-  const listingId = Number(body.listing_id);
-  const durationDays = Number(body.duration_days);
-  const currency = String(body.currency || "").toUpperCase();
+        const listingId = Number(body.listing_id);
+        const durationDays = Number(body.duration_days);
+        const currency = String(body.currency || "")
+          .trim()
+          .toUpperCase();
 
-  if (
-    !Number.isInteger(listingId) ||
-    !Number.isInteger(durationDays) ||
-    !["USDT", "RUB"].includes(currency)
-  ) {
-    return response({ error: "Invalid order data" }, 400, cors);
-  }
+        if (
+          !Number.isInteger(listingId) ||
+          listingId < 1 ||
+          !Number.isInteger(durationDays) ||
+          durationDays < 1 ||
+          !["USDT", "RUB"].includes(currency)
+        ) {
+          return response({
+            error: "Invalid order data"
+          }, 400, cors);
+        }
 
-  const listing = await getListing(env, listingId);
+        const listing = await getListing(env, listingId);
 
-  if (!listing || listing.status !== "APPROVED") {
-    return response({ error: "Product not available" }, 404, cors);
-  }
+        if (!listing || listing.status !== "APPROVED") {
+          return response({
+            error: "Product not available"
+          }, 404, cors);
+        }
 
-  const option = listing.rental_options.find(item =>
-    Number(item.duration_days) === durationDays &&
-    String(item.currency).toUpperCase() === currency &&
-    Number(item.is_active) !== 0
-  );
+        const option = listing.rental_options.find(item =>
+          Number(item.duration_days) === durationDays &&
+          String(item.currency).toUpperCase() === currency &&
+          Number(item.is_active) !== 0
+        );
 
-  if (!option || Number(option.price) <= 0) {
-    return response({ error: "Selected option unavailable" }, 400, cors);
-  }
+        if (
+          !option ||
+          !Number.isFinite(Number(option.price)) ||
+          Number(option.price) <= 0
+        ) {
+          return response({
+            error: "Selected option unavailable"
+          }, 400, cors);
+        }
 
-  const result = await env.DB.prepare(`
-    INSERT INTO orders (
-      user_telegram_id, username, first_name,
-      listing_id, listing_title, category,
-      duration_days, currency, amount
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    String(user.id),
-    user.username || "",
-    user.first_name || "",
-    listingId,
-    listing.title,
-    listing.category,
-    durationDays,
-    currency,
-    Number(option.price)
-  ).run();
+        // ВАЖНО:
+        // Сначала создаём или находим пользователя в users.
+        // Это необходимо из-за обязательного orders.user_id.
 
-  const orderId = result.meta.last_row_id;
+        const dbUser = await getOrCreateUser(env, telegramUser);
+        const amount = Number(option.price);
 
-  const admins = (env.ADMIN_IDS || "")
-    .split(",")
-    .map(id => id.trim())
-    .filter(Boolean);
+        // Заполняем и старые обязательные поля,
+        // и новые поля, добавленные миграциями.
 
-  const notification =
-    `НОВАЯ ЗАЯВКА №${orderId}\n\n` +
-    `Товар: ${escapeText(listing.title)}\n` +
-    `Категория: ${escapeText(listing.category)}\n` +
-    `Срок: ${durationDays} дней\n` +
-    `Цена: ${Number(option.price)} ${currency}\n\n` +
-    `Пользователь: ${escapeText(user.first_name)}\n` +
-    `Username: @${escapeText(user.username || "не указан")}\n` +
-    `Telegram ID: ${user.id}`;
+        const result = await env.DB.prepare(`
+          INSERT INTO orders (
+            user_id,
+            listing_id,
+            status,
+            total_price,
+            user_telegram_id,
+            username,
+            first_name,
+            listing_title,
+            category,
+            duration_days,
+            currency,
+            amount
+          )
+          VALUES (?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          dbUser.id,
+          listingId,
+          amount,
+          dbUser.telegramId,
+          dbUser.username,
+          dbUser.firstName,
+          listing.title,
+          listing.category,
+          durationDays,
+          currency,
+          amount
+        ).run();
 
-  for (const adminId of admins) {
-    await sendTelegramMessage(env, adminId, notification);
-  }
+        const orderId = result.meta.last_row_id;
 
-  return response({
-    ok: true,
-    order_id: orderId,
-    message: "Заявка создана"
-  }, 201, cors);
-}
+        const admins = (env.ADMIN_IDS || "")
+          .split(",")
+          .map(id => id.trim())
+          .filter(Boolean);
 
-// USER ORDERS
+        const notification =
+          `НОВАЯ ЗАЯВКА №${orderId}\n\n` +
+          `Товар: ${escapeText(listing.title)}\n` +
+          `Категория: ${escapeText(listing.category)}\n` +
+          `Срок: ${durationDays} дней\n` +
+          `Цена: ${amount} ${currency}\n\n` +
+          `Пользователь: ${escapeText(dbUser.firstName)}\n` +
+          `Username: @${escapeText(dbUser.username || "не указан")}\n` +
+          `Telegram ID: ${dbUser.telegramId}`;
 
-if (path === "/api/orders" && method === "GET") {
-  const user = await verifyTelegram(
-    request.headers.get("X-Telegram-Init-Data"),
-    env.BOT_TOKEN
-  );
+        for (const adminId of admins) {
+          await sendTelegramMessage(
+            env,
+            adminId,
+            notification
+          );
+        }
 
-  if (!user?.id) {
-    return response({ error: "Telegram authorization required" }, 401, cors);
-  }
+        return response({
+          ok: true,
+          order_id: orderId,
+          message: "Заявка создана"
+        }, 201, cors);
+      }
 
-  await ensureOrdersTable(env);
+      // USER ORDERS
 
-  const result = await env.DB.prepare(`
-    SELECT * FROM orders
-    WHERE user_telegram_id = ?
-    ORDER BY created_at DESC
-  `).bind(String(user.id)).all();
+      if (path === "/api/orders" && method === "GET") {
+        const user = await verifyTelegram(
+          request.headers.get("X-Telegram-Init-Data"),
+          env.BOT_TOKEN
+        );
 
-  return response({
-    ok: true,
-    orders: result.results || []
-  }, 200, cors);
-}
+        if (!user?.id) {
+          return response({
+            error: "Telegram authorization required"
+          }, 401, cors);
+        }
+
+        await ensureOrdersTable(env);
+
+        const result = await env.DB.prepare(`
+          SELECT *
+          FROM orders
+          WHERE user_telegram_id = ?
+          ORDER BY created_at DESC
+        `).bind(String(user.id)).all();
+
+        return response({
+          ok: true,
+          orders: result.results || []
+        }, 200, cors);
+      }
 
       // ADMIN ROUTES
 
@@ -489,67 +599,83 @@ if (path === "/api/orders" && method === "GET") {
 
         // ADMIN ORDERS
 
-if (path === "/api/admin/orders" && method === "GET") {
-  await ensureOrdersTable(env);
+        if (path === "/api/admin/orders" && method === "GET") {
+          await ensureOrdersTable(env);
 
-  const result = await env.DB.prepare(`
-    SELECT * FROM orders
-    ORDER BY created_at DESC
-  `).all();
+          const result = await env.DB.prepare(`
+            SELECT *
+            FROM orders
+            ORDER BY created_at DESC
+          `).all();
 
-  return response({
-    ok: true,
-    orders: result.results || []
-  }, 200, cors);
-}
+          return response({
+            ok: true,
+            orders: result.results || []
+          }, 200, cors);
+        }
 
-const orderMatch = path.match(/^\/api\/admin\/orders\/(\d+)$/);
+        // CHANGE ORDER STATUS
 
-if (orderMatch && method === "PATCH") {
-  await ensureOrdersTable(env);
+        const orderMatch = path.match(
+          /^\/api\/admin\/orders\/(\d+)$/
+        );
 
-  const orderId = Number(orderMatch[1]);
-  const body = await request.json();
-  const status = String(body.status || "");
+        if (orderMatch && method === "PATCH") {
+          await ensureOrdersTable(env);
 
-  if (!["ACCEPTED", "REJECTED", "COMPLETED"].includes(status)) {
-    return response({ error: "Invalid status" }, 400, cors);
-  }
+          const orderId = Number(orderMatch[1]);
+          const body = await request.json();
+          const status = String(body.status || "");
 
-  const order = await env.DB.prepare(`
-    SELECT * FROM orders WHERE id = ?
-  `).bind(orderId).first();
+          if (!["ACCEPTED", "REJECTED", "COMPLETED"].includes(status)) {
+            return response({
+              error: "Invalid status"
+            }, 400, cors);
+          }
 
-  if (!order) {
-    return response({ error: "Order not found" }, 404, cors);
-  }
+          const order = await env.DB.prepare(`
+            SELECT *
+            FROM orders
+            WHERE id = ?
+          `).bind(orderId).first();
 
-  await env.DB.prepare(`
-    UPDATE orders
-    SET status = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).bind(status, orderId).run();
+          if (!order) {
+            return response({
+              error: "Order not found"
+            }, 404, cors);
+          }
 
-  const statusLabels = {
-    ACCEPTED: "принята",
-    REJECTED: "отклонена",
-    COMPLETED: "выполнена"
-  };
+          await env.DB.prepare(`
+            UPDATE orders
+            SET status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(status, orderId).run();
 
-  await sendTelegramMessage(
-    env,
-    order.user_telegram_id,
-    `Статус вашей заявки №${orderId}: ${statusLabels[status]}.`
-  );
+          const statusLabels = {
+            ACCEPTED: "принята",
+            REJECTED: "отклонена",
+            COMPLETED: "выполнена"
+          };
 
-  await audit(env, admin.id, "order_status", `${orderId}: ${status}`);
+          await sendTelegramMessage(
+            env,
+            order.user_telegram_id,
+            `Статус вашей заявки №${orderId}: ${statusLabels[status]}.`
+          );
 
-  return response({
-    ok: true,
-    order_id: orderId,
-    status
-  }, 200, cors);
-}
+          await audit(
+            env,
+            admin.id,
+            "order_status",
+            `${orderId}: ${status}`
+          );
+
+          return response({
+            ok: true,
+            order_id: orderId,
+            status
+          }, 200, cors);
+        }
 
         // ADMIN LISTINGS
 
@@ -558,7 +684,8 @@ if (orderMatch && method === "PATCH") {
           method === "GET"
         ) {
           const result = await env.DB.prepare(`
-            SELECT * FROM listings
+            SELECT *
+            FROM listings
             ORDER BY created_at DESC
           `).all();
 
@@ -606,9 +733,16 @@ if (orderMatch && method === "PATCH") {
           }
 
           const result = await env.DB.prepare(`
-            INSERT INTO listings
-            (title, description, category, image_url, price,
-             rental_period, status, created_by)
+            INSERT INTO listings (
+              title,
+              description,
+              category,
+              image_url,
+              price,
+              rental_period,
+              status,
+              created_by
+            )
             VALUES (?, ?, ?, ?, ?, ?, 'APPROVED', ?)
           `).bind(
             title,
@@ -623,7 +757,12 @@ if (orderMatch && method === "PATCH") {
           const id = result.meta.last_row_id;
 
           await saveOptions(env, id, options);
-          await audit(env, admin.id, "create_listing", String(id));
+          await audit(
+            env,
+            admin.id,
+            "create_listing",
+            String(id)
+          );
 
           return response({
             ok: true,
@@ -675,8 +814,13 @@ if (orderMatch && method === "PATCH") {
 
           await env.DB.prepare(`
             UPDATE listings
-            SET title = ?, description = ?, category = ?,
-                image_url = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+            SET
+              title = ?,
+              description = ?,
+              category = ?,
+              image_url = ?,
+              status = ?,
+              updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
           `).bind(
             title,
@@ -704,7 +848,12 @@ if (orderMatch && method === "PATCH") {
             );
           }
 
-          await audit(env, admin.id, "edit_listing", String(id));
+          await audit(
+            env,
+            admin.id,
+            "edit_listing",
+            String(id)
+          );
 
           return response({
             ok: true,
@@ -717,19 +866,46 @@ if (orderMatch && method === "PATCH") {
         if (editMatch && method === "DELETE") {
           const id = Number(editMatch[1]);
 
-          await env.DB.prepare(
-            "DELETE FROM rental_options WHERE listing_id = ?"
-          ).bind(id).run();
+          // Если на товар уже есть заявки, скрываем его,
+          // чтобы не нарушать связь orders.listing_id.
 
-          await env.DB.prepare(
-            "DELETE FROM listings WHERE id = ?"
-          ).bind(id).run();
+          const linkedOrder = await env.DB.prepare(`
+            SELECT id
+            FROM orders
+            WHERE listing_id = ?
+            LIMIT 1
+          `).bind(id).first();
 
-          await audit(env, admin.id, "delete_listing", String(id));
+          if (linkedOrder) {
+            await env.DB.prepare(`
+              UPDATE listings
+              SET status = 'HIDDEN',
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).bind(id).run();
+          } else {
+            await env.DB.prepare(`
+              DELETE FROM rental_options
+              WHERE listing_id = ?
+            `).bind(id).run();
+
+            await env.DB.prepare(`
+              DELETE FROM listings
+              WHERE id = ?
+            `).bind(id).run();
+          }
+
+          await audit(
+            env,
+            admin.id,
+            "delete_listing",
+            String(id)
+          );
 
           return response({
             ok: true,
-            deleted: id
+            deleted: id,
+            hidden: Boolean(linkedOrder)
           }, 200, cors);
         }
 
@@ -742,14 +918,13 @@ if (orderMatch && method === "PATCH") {
         error: "Not found"
       }, 404, cors);
 
-} catch (error) {
-  console.error("PRESTIGE WORKER ERROR:", error);
+    } catch (error) {
+      console.error("PRESTIGE WORKER ERROR:", error);
 
-  return response({
-    error: "Internal server error",
-    details: String(error?.message || error),
-    stack: String(error?.stack || "")
-  }, 500, cors);
-}
+      return response({
+        error: "Internal server error",
+        details: String(error?.message || error)
+      }, 500, cors);
+    }
   }
 };
