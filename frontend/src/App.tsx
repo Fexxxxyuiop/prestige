@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 import {
   Search, Gift, User, ShoppingBag, ChevronRight,
@@ -24,6 +23,9 @@ declare global {
     };
   }
 }
+
+type Currency = "USD" | "RUB" | "TON";
+type Rates = { RUB: number; TON: number };
 
 type RentalOption = {
   id?: number;
@@ -55,6 +57,20 @@ function App() {
     "Content-Type": "application/json",
     "X-Telegram-Init-Data": initData
   };
+
+  const [currency, setCurrency] = useState<Currency>("USD");
+  const [rates, setRates] = useState<Rates | null>(null);
+
+  function formatPrice(usd: number) {
+    if (currency === "USD") return `${usd.toFixed(2)} USD`;
+    if (!rates) return "Курс загружается…";
+    if (currency === "RUB") {
+      return `${(usd * rates.RUB).toLocaleString("ru-RU", {
+        maximumFractionDigits: 0
+      })} ₽`;
+    }
+    return `${(usd * rates.TON).toFixed(3)} TON`;
+  }
 
   const [tab, setTab] = useState("market");
   const [category, setCategory] = useState("all");
@@ -93,7 +109,26 @@ function App() {
 
     void loadListings();
     void checkAdmin();
+    void loadRates();
   }, []);
+
+  async function loadRates() {
+    try {
+      const response = await fetch(`${API}/api/rates`);
+      if (!response.ok) throw new Error("Курсы временно недоступны");
+
+      const data = await response.json();
+
+      if (Number(data.RUB) > 0 && Number(data.TON) > 0) {
+        setRates({
+          RUB: Number(data.RUB),
+          TON: Number(data.TON)
+        });
+      }
+    } catch {
+      setRates(null);
+    }
+  }
 
   async function loadListings() {
     setLoading(true);
@@ -460,39 +495,44 @@ function App() {
           </div>
 
           <div className="detail-card">
-  <div className="category-list">
-    {[
-      ["gifts", "NFT-подарки"],
-      ["usernames", "Юзернеймы"],
-      ["numbers", "Номера"]
-    ].map(([id, label]) => (
-      <button
-        key={id}
-        type="button"
-        className={giftCategory === id ? "category active" : "category"}
-        onClick={() => {
-          setGiftCategory(id);
-          resetForm();
-        }}
-      >
-        {label}
-      </button>
-    ))}
-  </div>
+            <div className="category-list">
+              {[
+                ["gifts", "NFT-подарки"],
+                ["usernames", "Юзернеймы"],
+                ["numbers", "Номера"]
+              ].map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={giftCategory === id ? "category active" : "category"}
+                  onClick={() => {
+                    setGiftCategory(id);
+                    resetForm();
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
 
-  <h3>
-            
+            <h3>
               {editingId ? "Редактировать подарок" : "Добавить подарок"}
             </h3>
 
-         <label>
-  {giftCategory === "gifts"
-    ? "Название подарка"
-    : giftCategory === "usernames"
-      ? "Юзернейм"
-      : "Номер телефона"}
-</label>
-      
+            <label>
+              {giftCategory === "gifts"
+                ? "Название подарка"
+                : giftCategory === "usernames"
+                  ? "Юзернейм"
+                  : "Номер телефона"}
+            </label>
+
+            <input
+              className="admin-input"
+              placeholder="Название..."
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+            />
 
             <label>Описание</label>
             <textarea
@@ -516,8 +556,6 @@ function App() {
               </div>
             )}
 
-            
-
             <div className="section-heading">
               <h3>Сроки и цены аренды</h3>
               <button className="text-button" onClick={addOption}>
@@ -538,7 +576,7 @@ function App() {
                   }
                 />
 
-                <label>Цена за весь срок</label>
+                <label>Цена за весь срок (USD)</label>
                 <input
                   className="admin-input"
                   type="number"
@@ -619,7 +657,7 @@ function App() {
 
                 <span>
                   {(item.rental_options || [])
-                    .map(o => `${o.duration_days} дн. — ${o.price}`)
+                    .map(o => `${o.duration_days} дн. — ${Number(o.price).toFixed(2)} USD`)
                     .join(" / ")}
                 </span>
               </div>
@@ -685,6 +723,19 @@ function App() {
             <h1>{selected.title}</h1>
             <p>{selected.description}</p>
 
+            <label>Валюта отображения</label>
+            <div className="category-list">
+              {(["USD", "RUB", "TON"] as Currency[]).map(value => (
+                <button
+                  key={value}
+                  className={currency === value ? "category active" : "category"}
+                  onClick={() => setCurrency(value)}
+                >
+                  {value}
+                </button>
+              ))}
+            </div>
+
             <label>Выбери срок аренды</label>
 
             {(selected.rental_options || [])
@@ -695,7 +746,7 @@ function App() {
                   className="secondary-button"
                   onClick={() => setSelectedOption(option)}
                 >
-                  {option.duration_days} дней — {option.price}
+                  {option.duration_days} дней — {formatPrice(Number(option.price))}
                   {selectedOption?.duration_days === option.duration_days
                     ? " ✓"
                     : ""}
@@ -704,7 +755,11 @@ function App() {
 
             <div className="total">
               <span>Стоимость аренды</span>
-              <strong>{totalPrice}</strong>
+              <strong>
+                {selectedOption
+                  ? formatPrice(Number(totalPrice))
+                  : "—"}
+              </strong>
             </div>
 
             <button
@@ -767,6 +822,8 @@ function App() {
                     <ProductCard
                       key={item.id}
                       item={item}
+                      currency={currency}
+                      rates={rates}
                       onClick={() => {
                         setSelected(item);
                         setSelectedOption(null);
@@ -840,6 +897,8 @@ function App() {
                       <ProductCard
                         key={item.id}
                         item={item}
+                        currency={currency}
+                        rates={rates}
                         onClick={() => {
                           setSelected(item);
                           setSelectedOption(null);
@@ -938,10 +997,14 @@ function App() {
 
 function ProductCard({
   item,
-  onClick
+  onClick,
+  currency,
+  rates
 }: {
   item: Listing;
   onClick: () => void;
+  currency: Currency;
+  rates: Rates | null;
 }) {
   const prices = (item.rental_options || [])
     .filter(option => option.is_active !== 0)
@@ -950,6 +1013,16 @@ function ProductCard({
   const minPrice = prices.length
     ? Math.min(...prices)
     : item.price;
+
+  const displayedPrice = currency === "USD"
+    ? `${Number(minPrice).toFixed(2)} USD`
+    : !rates
+      ? "Курс загружается…"
+      : currency === "RUB"
+        ? `${(Number(minPrice) * rates.RUB).toLocaleString("ru-RU", {
+            maximumFractionDigits: 0
+          })} ₽`
+        : `${(Number(minPrice) * rates.TON).toFixed(3)} TON`;
 
   return (
     <button className="product-card" onClick={onClick}>
@@ -964,7 +1037,7 @@ function ProductCard({
         <span>{item.category}</span>
         <strong>{item.title}</strong>
         <div className="product-price">
-          От {minPrice} <small>/ аренда</small>
+          От {displayedPrice} <small>/ аренда</small>
         </div>
       </div>
     </button>
