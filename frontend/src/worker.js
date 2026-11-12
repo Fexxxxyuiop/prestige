@@ -1,4 +1,3 @@
-
 const allowedOrigins = [
   "https://fexxxxyuiop.github.io",
   "https://web.telegram.org",
@@ -10,7 +9,9 @@ function getCorsHeaders(request) {
   const allowed = allowedOrigins.includes(origin);
 
   return {
-    "Access-Control-Allow-Origin": allowed ? origin : "https://fexxxxyuiop.github.io",
+    "Access-Control-Allow-Origin": allowed
+      ? origin
+      : "https://fexxxxyuiop.github.io",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-Telegram-Init-Data",
     "Vary": "Origin"
@@ -25,6 +26,43 @@ function response(data, status = 200, headers = {}) {
       "Content-Type": "application/json"
     }
   });
+}
+
+async function getRates() {
+  const [rubResponse, tonResponse] = await Promise.all([
+    fetch("https://open.er-api.com/v6/latest/USD", {
+      cf: { cacheTtl: 300, cacheEverything: true }
+    }),
+    fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd",
+      { cf: { cacheTtl: 300, cacheEverything: true } }
+    )
+  ]);
+
+  if (!rubResponse.ok || !tonResponse.ok) {
+    throw new Error("Exchange rate provider unavailable");
+  }
+
+  const rubData = await rubResponse.json();
+  const tonData = await tonResponse.json();
+
+  const rub = Number(rubData?.rates?.RUB);
+  const tonUsd = Number(tonData?.["the-open-network"]?.usd);
+
+  if (
+    !Number.isFinite(rub) ||
+    rub <= 0 ||
+    !Number.isFinite(tonUsd) ||
+    tonUsd <= 0
+  ) {
+    throw new Error("Invalid exchange rates");
+  }
+
+  return {
+    RUB: rub,
+    TON: 1 / tonUsd,
+    updated_at: new Date().toISOString()
+  };
 }
 
 async function verifyTelegram(initData, botToken) {
@@ -108,7 +146,6 @@ async function audit(env, adminId, action, details = "") {
   `).bind(String(adminId), action, details).run();
 }
 
-// Автоматическое добавление колонки валюты в существующую базу
 let currencyMigrationPromise = null;
 
 async function ensureCurrencyColumn(env) {
@@ -201,17 +238,12 @@ async function saveOptions(env, listingId, options) {
   for (const option of options) {
     const days = Number(option.duration_days);
     const price = Number(option.price);
-    const currency = ["USD", "RUB", "TON"].includes(
-      String(option.currency || "USD").toUpperCase()
-    )
-      ? String(option.currency || "USD").toUpperCase()
-      : "USD";
 
     await env.DB.prepare(`
       INSERT INTO rental_options
       (listing_id, duration_days, price, currency, is_active)
-      VALUES (?, ?, ?, ?, 1)
-    `).bind(listingId, days, price, currency).run();
+      VALUES (?, ?, ?, 'USD', 1)
+    `).bind(listingId, days, price).run();
   }
 }
 
@@ -230,8 +262,6 @@ export default {
     }
 
     try {
-      await ensureCurrencyColumn(env);
-
       if (path === "/health") {
         return response({
           ok: true,
@@ -245,6 +275,26 @@ export default {
           status: "online"
         }, 200, cors);
       }
+
+      if (path === "/api/rates" && method === "GET") {
+        try {
+          const rates = await getRates();
+          return response({
+            ok: true,
+            ...rates
+          }, 200, {
+            ...cors,
+            "Cache-Control": "public, max-age=300"
+          });
+        } catch (error) {
+          return response({
+            ok: false,
+            error: "Курсы временно недоступны"
+          }, 503, cors);
+        }
+      }
+
+      await ensureCurrencyColumn(env);
 
       if (path === "/api/listings" && method === "GET") {
         const result = await env.DB.prepare(`
