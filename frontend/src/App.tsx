@@ -494,16 +494,7 @@ function App() {
               </div>
             )}
 
-            <label>Категория</label>
-            <select
-              className="admin-input"
-              value={giftCategory}
-              onChange={e => setGiftCategory(e.target.value)}
-            >
-              <option value="gifts">NFT Gifts</option>
-              <option value="usernames">Юзернеймы</option>
-              <option value="numbers">Номера</option>
-            </select>
+            
 
             <div className="section-heading">
               <h3>Сроки и цены аренды</h3>
