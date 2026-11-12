@@ -234,6 +234,49 @@ async function saveOptions(env, listingId, options) {
     `).bind(listingId, days, rub).run();
   }
 }
+// ORDERS SYSTEM
+
+async function ensureOrdersTable(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_telegram_id TEXT NOT NULL,
+      username TEXT,
+      first_name TEXT,
+      listing_id INTEGER NOT NULL,
+      listing_title TEXT NOT NULL,
+      category TEXT NOT NULL,
+      duration_days INTEGER NOT NULL,
+      currency TEXT NOT NULL,
+      amount REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'NEW',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT
+    )
+  `).run();
+}
+
+async function sendTelegramMessage(env, chatId, message) {
+  if (!env.BOT_TOKEN || !chatId) return;
+
+  await fetch(
+    `https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message
+      })
+    }
+  );
+}
+
+function escapeText(value) {
+  return String(value || "").replace(/[<>&]/g, "");
+}
 
 // MAIN WORKER
 
@@ -316,6 +359,123 @@ export default {
         }, 200, cors);
       }
 
+      // CREATE ORDER
+
+if (path === "/api/orders" && method === "POST") {
+  const user = await verifyTelegram(
+    request.headers.get("X-Telegram-Init-Data"),
+    env.BOT_TOKEN
+  );
+
+  if (!user?.id) {
+    return response({ error: "Telegram authorization required" }, 401, cors);
+  }
+
+  await ensureOrdersTable(env);
+
+  const body = await request.json();
+
+  const listingId = Number(body.listing_id);
+  const durationDays = Number(body.duration_days);
+  const currency = String(body.currency || "").toUpperCase();
+
+  if (
+    !Number.isInteger(listingId) ||
+    !Number.isInteger(durationDays) ||
+    !["USDT", "RUB"].includes(currency)
+  ) {
+    return response({ error: "Invalid order data" }, 400, cors);
+  }
+
+  const listing = await getListing(env, listingId);
+
+  if (!listing || listing.status !== "APPROVED") {
+    return response({ error: "Product not available" }, 404, cors);
+  }
+
+  const option = listing.rental_options.find(item =>
+    Number(item.duration_days) === durationDays &&
+    String(item.currency).toUpperCase() === currency &&
+    Number(item.is_active) !== 0
+  );
+
+  if (!option || Number(option.price) <= 0) {
+    return response({ error: "Selected option unavailable" }, 400, cors);
+  }
+
+  const result = await env.DB.prepare(`
+    INSERT INTO orders (
+      user_telegram_id, username, first_name,
+      listing_id, listing_title, category,
+      duration_days, currency, amount
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    String(user.id),
+    user.username || "",
+    user.first_name || "",
+    listingId,
+    listing.title,
+    listing.category,
+    durationDays,
+    currency,
+    Number(option.price)
+  ).run();
+
+  const orderId = result.meta.last_row_id;
+
+  const admins = (env.ADMIN_IDS || "")
+    .split(",")
+    .map(id => id.trim())
+    .filter(Boolean);
+
+  const notification =
+    `НОВАЯ ЗАЯВКА №${orderId}\n\n` +
+    `Товар: ${escapeText(listing.title)}\n` +
+    `Категория: ${escapeText(listing.category)}\n` +
+    `Срок: ${durationDays} дней\n` +
+    `Цена: ${Number(option.price)} ${currency}\n\n` +
+    `Пользователь: ${escapeText(user.first_name)}\n` +
+    `Username: @${escapeText(user.username || "не указан")}\n` +
+    `Telegram ID: ${user.id}`;
+
+  for (const adminId of admins) {
+    await sendTelegramMessage(env, adminId, notification);
+  }
+
+  return response({
+    ok: true,
+    order_id: orderId,
+    message: "Заявка создана"
+  }, 201, cors);
+}
+
+// USER ORDERS
+
+if (path === "/api/orders" && method === "GET") {
+  const user = await verifyTelegram(
+    request.headers.get("X-Telegram-Init-Data"),
+    env.BOT_TOKEN
+  );
+
+  if (!user?.id) {
+    return response({ error: "Telegram authorization required" }, 401, cors);
+  }
+
+  await ensureOrdersTable(env);
+
+  const result = await env.DB.prepare(`
+    SELECT * FROM orders
+    WHERE user_telegram_id = ?
+    ORDER BY created_at DESC
+  `).bind(String(user.id)).all();
+
+  return response({
+    ok: true,
+    orders: result.results || []
+  }, 200, cors);
+}
+
       // ADMIN ROUTES
 
       if (path.startsWith("/api/admin/")) {
@@ -326,6 +486,70 @@ export default {
             error: "Admin access denied"
           }, 403, cors);
         }
+
+        // ADMIN ORDERS
+
+if (path === "/api/admin/orders" && method === "GET") {
+  await ensureOrdersTable(env);
+
+  const result = await env.DB.prepare(`
+    SELECT * FROM orders
+    ORDER BY created_at DESC
+  `).all();
+
+  return response({
+    ok: true,
+    orders: result.results || []
+  }, 200, cors);
+}
+
+const orderMatch = path.match(/^\/api\/admin\/orders\/(\d+)$/);
+
+if (orderMatch && method === "PATCH") {
+  await ensureOrdersTable(env);
+
+  const orderId = Number(orderMatch[1]);
+  const body = await request.json();
+  const status = String(body.status || "");
+
+  if (!["ACCEPTED", "REJECTED", "COMPLETED"].includes(status)) {
+    return response({ error: "Invalid status" }, 400, cors);
+  }
+
+  const order = await env.DB.prepare(`
+    SELECT * FROM orders WHERE id = ?
+  `).bind(orderId).first();
+
+  if (!order) {
+    return response({ error: "Order not found" }, 404, cors);
+  }
+
+  await env.DB.prepare(`
+    UPDATE orders
+    SET status = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(status, orderId).run();
+
+  const statusLabels = {
+    ACCEPTED: "принята",
+    REJECTED: "отклонена",
+    COMPLETED: "выполнена"
+  };
+
+  await sendTelegramMessage(
+    env,
+    order.user_telegram_id,
+    `Статус вашей заявки №${orderId}: ${statusLabels[status]}.`
+  );
+
+  await audit(env, admin.id, "order_status", `${orderId}: ${status}`);
+
+  return response({
+    ok: true,
+    order_id: orderId,
+    status
+  }, 200, cors);
+}
 
         // ADMIN LISTINGS
 
