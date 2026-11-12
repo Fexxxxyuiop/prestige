@@ -218,17 +218,47 @@ function App() {
     }
   }
 
+  function defaultOptions(categoryId: string): FormOption[] {
+    if (categoryId === "premium") {
+      return [
+        { duration_days: "90", price_usdt: "", price_rub: "" },
+        { duration_days: "180", price_usdt: "", price_rub: "" },
+        { duration_days: "365", price_usdt: "", price_rub: "" }
+      ];
+    }
+
+    return [
+      { duration_days: "3", price_usdt: "3", price_rub: "300" },
+      { duration_days: "7", price_usdt: "5", price_rub: "500" },
+      { duration_days: "30", price_usdt: "10", price_rub: "1000" }
+    ];
+  }
+
+  function chooseAdminCategory(id: string) {
+    setGiftCategory(id);
+    setEditingId(null);
+    setTitle("");
+    setDescription("");
+    setImageUrl("");
+    setOptions(defaultOptions(id));
+  }
+
   function resetForm() {
     setEditingId(null);
     setTitle("");
     setDescription("");
     setImageUrl("");
-    setGiftCategory("gifts");
-    setOptions([
-      { duration_days: "3", price_usdt: "3", price_rub: "300" },
-      { duration_days: "7", price_usdt: "5", price_rub: "500" },
-      { duration_days: "30", price_usdt: "10", price_rub: "1000" }
-    ]);
+    setOptions(defaultOptions(giftCategory));
+  }
+
+  function durationLabel(days: number, premium = false) {
+    if (premium) {
+      if (days === 90) return "3 месяца";
+      if (days === 180) return "6 месяцев";
+      if (days === 365) return "12 месяцев";
+    }
+
+    return `${days} дн.`;
   }
 
   function editListing(item: Listing) {
@@ -307,7 +337,7 @@ function App() {
     }
 
     if (!title.trim()) {
-      setMessage("Укажи название подарка.");
+      setMessage("Укажи название товара.");
       return;
     }
 
@@ -328,7 +358,7 @@ function App() {
         option.price_rub <= 0
       )
     ) {
-      setMessage("Проверь сроки и цены аренды.");
+      setMessage("Проверь сроки и цены в USDT и рублях.");
       return;
     }
 
@@ -357,11 +387,11 @@ function App() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Не удалось сохранить подарок");
+        throw new Error(data.error || "Не удалось сохранить товар");
       }
 
       setMessage(
-        editingId ? "Подарок обновлён!" : "Подарок добавлен!"
+        editingId ? "Товар обновлён!" : "Товар добавлен!"
       );
 
       resetForm();
@@ -400,8 +430,8 @@ function App() {
 
       setMessage(
         newStatus === "APPROVED"
-          ? "Подарок опубликован"
-          : "Подарок скрыт"
+          ? "Товар опубликован"
+          : "Товар скрыт"
       );
     } catch {
       setMessage("Ошибка изменения статуса");
@@ -409,7 +439,7 @@ function App() {
   }
 
   async function deleteListing(id: number) {
-    if (!window.confirm("Удалить этот подарок?")) return;
+    if (!window.confirm("Удалить этот товар?")) return;
 
     try {
       const response = await fetch(
@@ -424,14 +454,14 @@ function App() {
         throw new Error("Не удалось удалить");
       }
 
-      setMessage("Подарок удалён.");
+      setMessage("Товар удалён.");
 
       if (editingId === id) resetForm();
 
       await loadAdminListings();
       await loadListings();
     } catch {
-      setMessage("Не удалось удалить подарок.");
+      setMessage("Не удалось удалить товар.");
     }
   }
 
@@ -511,7 +541,8 @@ function App() {
               {[
                 ["gifts", "NFT-подарки"],
                 ["usernames", "Юзернеймы"],
-                ["numbers", "Номера"]
+                ["numbers", "Номера"],
+                ["premium", "Telegram Premium"]
               ].map(([id, label]) => (
                 <button
                   key={id}
@@ -521,10 +552,7 @@ function App() {
                       ? "category active"
                       : "category"
                   }
-                  onClick={() => {
-                    setGiftCategory(id);
-                    resetForm();
-                  }}
+                  onClick={() => chooseAdminCategory(id)}
                 >
                   {label}
                 </button>
@@ -533,21 +561,33 @@ function App() {
 
             <h3>
               {editingId
-                ? "Редактировать подарок"
-                : "Добавить подарок"}
+                ? "Редактировать товар"
+                : giftCategory === "premium"
+                  ? "Добавить Telegram Premium"
+                  : "Добавить товар"}
             </h3>
 
             <label>
               {giftCategory === "gifts"
-                ? "Название подарка"
+                ? "Название NFT-подарка"
                 : giftCategory === "usernames"
                   ? "Юзернейм"
-                  : "Номер телефона"}
+                  : giftCategory === "numbers"
+                    ? "Номер телефона"
+                    : "Название подписки"}
             </label>
 
             <input
               className="admin-input"
-              placeholder="Название..."
+              placeholder={
+                giftCategory === "premium"
+                  ? "Telegram Premium"
+                  : giftCategory === "usernames"
+                    ? "@username"
+                    : giftCategory === "numbers"
+                      ? "+номер телефона"
+                      : "Название NFT-подарка"
+              }
               value={title}
               onChange={e => setTitle(e.target.value)}
             />
@@ -555,7 +595,11 @@ function App() {
             <label>Описание</label>
             <textarea
               className="admin-input"
-              placeholder="Описание подарка..."
+              placeholder={
+                giftCategory === "premium"
+                  ? "Подписка Telegram Premium"
+                  : "Описание товара..."
+              }
               value={description}
               onChange={e => setDescription(e.target.value)}
             />
@@ -574,34 +618,56 @@ function App() {
               <div className="detail-image">
                 <GiftMedia
                   url={imageUrl}
-                  title="Предпросмотр подарка"
+                  title="Предпросмотр товара"
                 />
               </div>
             )}
 
             <div className="section-heading">
-              <h3>Сроки и цены аренды</h3>
-              <button className="text-button" onClick={addOption}>
-                <Plus size={16} /> Добавить срок
-              </button>
+              <h3>
+                {giftCategory === "premium"
+                  ? "Срок подписки и цены"
+                  : "Сроки и цены аренды"}
+              </h3>
+
+              {giftCategory !== "premium" && (
+                <button className="text-button" onClick={addOption}>
+                  <Plus size={16} /> Добавить срок
+                </button>
+              )}
             </div>
 
             {options.map((option, index) => (
               <div className="detail-card" key={index}>
-                <label>Срок аренды в днях</label>
-                <input
-                  className="admin-input"
-                  type="number"
-                  min="1"
-                  value={option.duration_days}
-                  onChange={e =>
-                    updateOption(
-                      index,
-                      "duration_days",
-                      e.target.value
-                    )
-                  }
-                />
+                <label>
+                  {giftCategory === "premium"
+                    ? "Срок подписки"
+                    : "Срок аренды в днях"}
+                </label>
+
+                {giftCategory === "premium" ? (
+                  <select
+                    className="admin-input"
+                    value={option.duration_days}
+                    onChange={e =>
+                      updateOption(index, "duration_days", e.target.value)
+                    }
+                  >
+                    <option value="90">3 месяца</option>
+                    <option value="180">6 месяцев</option>
+                    <option value="365">12 месяцев</option>
+                  </select>
+                ) : (
+                  <input
+                    className="admin-input"
+                    type="number"
+                    min="1"
+                    value={option.duration_days}
+                    onChange={e =>
+                      updateOption(index, "duration_days", e.target.value)
+                    }
+                  />
+                )}
 
                 <label>Цена за весь срок (USDT)</label>
                 <input
@@ -627,7 +693,7 @@ function App() {
                   }
                 />
 
-                {options.length > 1 && (
+                {options.length > 1 && giftCategory !== "premium" && (
                   <button
                     className="text-button"
                     onClick={() => removeOption(index)}
@@ -647,7 +713,7 @@ function App() {
                 ? "Сохранение..."
                 : editingId
                   ? "Сохранить изменения"
-                  : "Добавить подарок"}
+                  : "Добавить товар"}
               <ChevronRight size={18} />
             </button>
 
@@ -666,7 +732,7 @@ function App() {
           <div className="section-heading">
             <div>
               <span className="eyebrow">INVENTORY</span>
-              <h2>Все подарки</h2>
+              <h2>Все товары</h2>
             </div>
 
             <button
@@ -690,45 +756,32 @@ function App() {
                 <strong>{item.title}</strong>
 
                 <span>
+                  {item.category === "premium"
+                    ? "Telegram Premium"
+                    : item.category === "usernames"
+                      ? "Юзернейм"
+                      : item.category === "numbers"
+                        ? "Номер телефона"
+                        : "NFT-подарок"}
+                </span>
+
+                <span>
                   {item.status === "APPROVED"
                     ? "Опубликован"
                     : "Скрыт"}
                 </span>
 
                 <span>
-                  {Array.from(
-                    new Set(
-                      (item.rental_options || []).map(
-                        o => o.duration_days
-                      )
-                    )
-                  ).map(days => {
-                    const same = (item.rental_options || []).filter(
-                      o => o.duration_days === days
-                    );
-
-                    const usdt = same.find(
-                      o =>
-                        String(o.currency || "USD").toUpperCase() !==
-                        "RUB"
-                    );
-
-                    const rub = same.find(
-                      o =>
-                        String(o.currency || "").toUpperCase() ===
-                        "RUB"
-                    );
-
-                    return `${days} дн. — ${
-                      usdt
-                        ? `${Number(usdt.price).toFixed(2)} USDT`
-                        : "—"
-                    } / ${
-                      rub
-                        ? `${Number(rub.price).toLocaleString("ru-RU")} ₽`
-                        : "—"
-                    }`;
-                  }).join(" · ")}
+                  {(item.rental_options || []).map(option => (
+                    `${durationLabel(
+                      Number(option.duration_days),
+                      item.category === "premium"
+                    )} — ${
+                      String(option.currency || "USD").toUpperCase() === "RUB"
+                        ? `${Number(option.price).toLocaleString("ru-RU")} ₽`
+                        : `${Number(option.price).toFixed(2)} USDT`
+                    }`
+                  )).join(" · ")}
                 </span>
               </div>
 
@@ -764,7 +817,7 @@ function App() {
 
           {adminListings.length === 0 && (
             <div className="empty-state">
-              Подарков пока нет. Добавь первый выше.
+              Товаров пока нет. Добавь первый выше.
             </div>
           )}
 
@@ -821,17 +874,19 @@ function App() {
               ))}
             </div>
 
-            <label>Выбери срок аренды</label>
+            <label>
+              {selected.category === "premium"
+                ? "Выбери срок подписки"
+                : "Выбери срок аренды"}
+            </label>
 
             {(selected.rental_options || [])
               .filter(
                 option =>
                   option.is_active !== 0 &&
                   (currency === "RUB"
-                    ? String(option.currency || "").toUpperCase() ===
-                      "RUB"
-                    : String(option.currency || "USD").toUpperCase() !==
-                      "RUB")
+                    ? String(option.currency || "").toUpperCase() === "RUB"
+                    : String(option.currency || "USD").toUpperCase() !== "RUB")
               )
               .map(option => (
                 <button
@@ -839,8 +894,10 @@ function App() {
                   className="secondary-button"
                   onClick={() => setSelectedOption(option)}
                 >
-                  {option.duration_days} дней —{" "}
-                  {formatPrice(Number(option.price))}
+                  {durationLabel(
+                    Number(option.duration_days),
+                    selected.category === "premium"
+                  )} — {formatPrice(Number(option.price))}
                   {selectedOption?.id === option.id &&
                   selectedOption?.duration_days === option.duration_days
                     ? " ✓"
@@ -849,7 +906,11 @@ function App() {
               ))}
 
             <div className="total">
-              <span>Стоимость аренды</span>
+              <span>
+                {selected.category === "premium"
+                  ? "Стоимость подписки"
+                  : "Стоимость аренды"}
+              </span>
               <strong>
                 {selectedOption
                   ? formatPrice(Number(totalPrice))
@@ -862,7 +923,7 @@ function App() {
               disabled={!selectedOption}
               onClick={() => {
                 setMessage(
-                  "Заявка на аренду будет согласована с администрацией."
+                  "Заявка будет согласована с администрацией."
                 );
               }}
             >
@@ -870,8 +931,7 @@ function App() {
             </button>
 
             <p className="small-note">
-              Условия аренды и подтверждение заявки согласовываются
-              отдельно.
+              Условия заказа и подтверждение заявки согласовываются отдельно.
             </p>
           </div>
 
@@ -933,9 +993,7 @@ function App() {
                   <div className="empty-state">
                     <Gift size={36} />
                     <strong>
-                      {error
-                        ? "Каталог недоступен"
-                        : "Пока нет подарков"}
+                      {error ? "Каталог недоступен" : "Пока нет товаров"}
                     </strong>
                     <span>
                       {error || "Новые предложения появятся здесь."}
@@ -955,9 +1013,7 @@ function App() {
               <>
                 <div className="section-heading">
                   <div>
-                    <span className="eyebrow">
-                      EXPLORE COLLECTIONS
-                    </span>
+                    <span className="eyebrow">EXPLORE COLLECTIONS</span>
                     <h2>Маркет</h2>
                   </div>
                 </div>
@@ -965,7 +1021,7 @@ function App() {
                 <div className="search-box">
                   <Search size={18} />
                   <input
-                    placeholder="Поиск подарков..."
+                    placeholder="Поиск товаров..."
                     value={search}
                     onChange={e => setSearch(e.target.value)}
                   />
@@ -976,14 +1032,13 @@ function App() {
                     ["all", "Все"],
                     ["gifts", "NFT Gifts"],
                     ["usernames", "Юзернеймы"],
-                    ["numbers", "Номера"]
+                    ["numbers", "Номера"],
+                    ["premium", "Telegram Premium"]
                   ].map(([id, label]) => (
                     <button
                       key={id}
                       className={
-                        category === id
-                          ? "category active"
-                          : "category"
+                        category === id ? "category active" : "category"
                       }
                       onClick={() => setCategory(id)}
                     >
@@ -1012,7 +1067,7 @@ function App() {
 
                 {!loading && filteredItems.length === 0 && (
                   <div className="empty-state">
-                    Подарки не найдены.
+                    Товары не найдены.
                   </div>
                 )}
               </>
@@ -1181,14 +1236,36 @@ function ProductCard({
         ) : (
           <Gift size={43} />
         )}
-        <span className="product-tag">NFT</span>
+
+        <span className="product-tag">
+          {item.category === "premium"
+            ? "PREMIUM"
+            : item.category === "usernames"
+              ? "USERNAME"
+              : item.category === "numbers"
+                ? "NUMBER"
+                : "NFT"}
+        </span>
       </div>
 
       <div className="product-info">
-        <span>{item.category}</span>
+        <span>
+          {item.category === "premium"
+            ? "Telegram Premium"
+            : item.category === "usernames"
+              ? "Юзернейм"
+              : item.category === "numbers"
+                ? "Номер телефона"
+                : "NFT-подарок"}
+        </span>
+
         <strong>{item.title}</strong>
+
         <div className="product-price">
-          От {displayedPrice} <small>/ аренда</small>
+          От {displayedPrice}{" "}
+          <small>
+            / {item.category === "premium" ? "подписка" : "аренда"}
+          </small>
         </div>
       </div>
     </button>
