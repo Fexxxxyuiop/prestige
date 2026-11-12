@@ -52,6 +52,20 @@ type FormOption = {
   price_rub: string;
 };
 
+type Order = {
+  id: number;
+  user_telegram_id: string;
+  username: string;
+  first_name: string;
+  listing_title: string;
+  category: string;
+  duration_days: number;
+  currency: string;
+  amount: number;
+  status: string;
+  created_at: string;
+};
+
 function App() {
   const initData = window.Telegram?.WebApp?.initData || "";
 
