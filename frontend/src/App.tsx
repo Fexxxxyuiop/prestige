@@ -460,7 +460,28 @@ function App() {
           </div>
 
           <div className="detail-card">
-            <h3>
+  <div className="category-list">
+    {[
+      ["gifts", "NFT-подарки"],
+      ["usernames", "Юзернеймы"],
+      ["numbers", "Номера"]
+    ].map(([id, label]) => (
+      <button
+        key={id}
+        type="button"
+        className={giftCategory === id ? "category active" : "category"}
+        onClick={() => {
+          setGiftCategory(id);
+          resetForm();
+        }}
+      >
+        {label}
+      </button>
+    ))}
+  </div>
+
+  <h3>
+            
               {editingId ? "Редактировать подарок" : "Добавить подарок"}
             </h3>
 
