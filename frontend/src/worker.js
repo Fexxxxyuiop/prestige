@@ -286,13 +286,13 @@ export default {
             ...cors,
             "Cache-Control": "public, max-age=300"
           });
-        } catch (error) {
+          
+             } catch (error) {
           return response({
             ok: false,
-            error: "Курсы временно недоступны"
+            error: String(error?.message || error)
           }, 503, cors);
         }
-      }
 
       await ensureCurrencyColumn(env);
 
