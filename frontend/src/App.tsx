@@ -96,6 +96,8 @@ function App() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminListings, setAdminListings] = useState<Listing[]>([]);
+  const [adminOrders, setAdminOrders] = useState<Order[]>([]);
+const [ordersLoading, setOrdersLoading] = useState(false);
   const [debugInfo, setDebugInfo] = useState("Проверяем приложение...");
 
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -200,6 +202,55 @@ function App() {
       setDebugInfo("Нет данных Telegram для авторизации");
       return;
     }
+    async function loadAdminOrders() {
+  setOrdersLoading(true);
+
+  try {
+    const response = await fetch(`${API}/api/admin/orders`, {
+      headers
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Не удалось загрузить заявки");
+    }
+
+    setAdminOrders(Array.isArray(data.orders) ? data.orders : []);
+  } catch (e) {
+    setMessage(
+      e instanceof Error ? e.message : "Ошибка загрузки заявок"
+    );
+  } finally {
+    setOrdersLoading(false);
+  }
+}
+
+async function updateOrderStatus(
+  id: number,
+  status: "ACCEPTED" | "REJECTED" | "COMPLETED"
+) {
+  try {
+    const response = await fetch(`${API}/api/admin/orders/${id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ status })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Не удалось изменить заявку");
+    }
+
+    setMessage("Статус заявки обновлён");
+    await loadAdminOrders();
+  } catch (e) {
+    setMessage(
+      e instanceof Error ? e.message : "Ошибка обновления заявки"
+    );
+  }
+}
 
     try {
       const response = await fetch(`${API}/api/admin/listings`, {
@@ -528,8 +579,11 @@ function App() {
               setSelected(null);
 
               if (next) {
-                await loadAdminListings();
-              }
+  await loadAdminListings();
+  await loadAdminOrders();
+}
+                
+              
             }}
           >
             <ShieldCheck size={18} />
@@ -549,7 +603,71 @@ function App() {
             </div>
             <ShieldCheck size={25} />
           </div>
+           <div className="section-heading">
+  <div>
+    <span className="eyebrow">ORDERS</span>
+    <h2>Заявки пользователей</h2>
+  </div>
 
+  <button
+    className="text-button"
+    onClick={loadAdminOrders}
+  >
+    <RefreshCw size={16} />
+    Обновить
+  </button>
+</div>
+
+{ordersLoading && (
+  <div className="empty-state">Загружаем заявки...</div>
+)}
+
+{!ordersLoading && adminOrders.length === 0 && (
+  <div className="empty-state">
+    Пока заявок нет.
+  </div>
+)}
+
+{adminOrders.map(order => (
+  <div className="detail-card" key={order.id}>
+    <h3>Заявка №{order.id}</h3>
+
+    <p><b>Товар:</b> {order.listing_title}</p>
+    <p><b>Покупатель:</b> {order.first_name || "Пользователь"}</p>
+    <p><b>Username:</b> {order.username ? `@${order.username}` : "Не указан"}</p>
+    <p><b>Telegram ID:</b> {order.user_telegram_id}</p>
+    <p><b>Срок:</b> {order.duration_days} дней</p>
+    <p><b>Сумма:</b> {order.amount} {order.currency}</p>
+    <p><b>Статус:</b> {order.status}</p>
+
+    {order.status === "NEW" && (
+      <div className="category-list">
+        <button
+          className="primary-button"
+          onClick={() => updateOrderStatus(order.id, "ACCEPTED")}
+        >
+          Принять
+        </button>
+
+        <button
+          className="secondary-button"
+          onClick={() => updateOrderStatus(order.id, "REJECTED")}
+        >
+          Отклонить
+        </button>
+      </div>
+    )}
+
+    {order.status === "ACCEPTED" && (
+      <button
+        className="primary-button"
+        onClick={() => updateOrderStatus(order.id, "COMPLETED")}
+      >
+        Завершить заявку
+      </button>
+    )}
+  </div>
+))}
           <div className="detail-card">
             <div className="category-list">
               {[
