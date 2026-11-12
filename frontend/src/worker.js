@@ -45,45 +45,63 @@ async function getRates() {
     throw new Error("Invalid RUB rate");
   }
 
-  let tonUsd = 0;
-
-  try {
-    const tonResponse = await fetch(
-      "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd"
-    );
-
-    if (tonResponse.ok) {
-      const tonData = await tonResponse.json();
-      tonUsd = Number(tonData?.["the-open-network"]?.usd);
-    }
-  } catch (error) {
-    tonUsd = 0;
-  }
-
-  if (!Number.isFinite(tonUsd) || tonUsd <= 0) {
-    try {
-      const backupResponse = await fetch(
+  const providers = [
+    async () => {
+      const r = await fetch(
+        "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd",
+        { headers: { Accept: "application/json" } }
+      );
+      if (!r.ok) throw new Error("CoinGecko HTTP " + r.status);
+      const d = await r.json();
+      return Number(d?.["the-open-network"]?.usd);
+    },
+    async () => {
+      const r = await fetch(
+        "https://api.coinpaprika.com/v1/tickers/ton-toncoin"
+      );
+      if (!r.ok) throw new Error("CoinPaprika HTTP " + r.status);
+      const d = await r.json();
+      return Number(d?.quotes?.USD?.price);
+    },
+    async () => {
+      const r = await fetch(
+        "https://api.coincap.io/v2/assets/toncoin"
+      );
+      if (!r.ok) throw new Error("CoinCap HTTP " + r.status);
+      const d = await r.json();
+      return Number(d?.data?.priceUsd);
+    },
+    async () => {
+      const r = await fetch(
         "https://min-api.cryptocompare.com/data/price?fsym=TON&tsyms=USD"
       );
+      if (!r.ok) throw new Error("CryptoCompare HTTP " + r.status);
+      const d = await r.json();
+      return Number(d?.USD);
+    }
+  ];
 
-      if (backupResponse.ok) {
-        const backupData = await backupResponse.json();
-        tonUsd = Number(backupData?.USD);
+  const errors = [];
+
+  for (const provider of providers) {
+    try {
+      const tonUsd = await provider();
+
+      if (Number.isFinite(tonUsd) && tonUsd > 0) {
+        return {
+          RUB: rub,
+          TON: 1 / tonUsd,
+          updated_at: new Date().toISOString()
+        };
       }
     } catch (error) {
-      tonUsd = 0;
+      errors.push(String(error?.message || error));
     }
   }
 
-  if (!Number.isFinite(tonUsd) || tonUsd <= 0) {
-    throw new Error("TON rate providers unavailable");
-  }
-
-  return {
-    RUB: rub,
-    TON: 1 / tonUsd,
-    updated_at: new Date().toISOString()
-  };
+  throw new Error(
+    "TON providers unavailable: " + errors.join("; ")
+  );
 }
 
 // TELEGRAM AUTH
