@@ -759,45 +759,68 @@ if (path === "/api/marketapp/inspect" && method === "GET") {
     }, 500, cors);
   }
 
-  async function inspect(endpoint) {
+    async function inspect(endpoint) {
     try {
-      const res = await fetch(
-        `https://api.marketapp.org${endpoint}`,
-        {
+      let allItems = [];
+      let cursor = null;
+      let pages = 0;
+
+      while (pages < 20) {
+        const url = new URL(`https://api.marketapp.org${endpoint}`);
+        url.searchParams.set("limit", "100");
+        url.searchParams.set("include_sellable", "false");
+
+        if (cursor) {
+          url.searchParams.set("cursor", cursor);
+        }
+
+        const res = await fetch(url.toString(), {
           headers: {
             "Authorization": token,
             "Accept": "application/json"
           }
+        });
+
+        const payload = await res.json();
+
+        if (!res.ok) {
+          return {
+            status: res.status,
+            error: payload?.detail || "MarketApp API error",
+            item_count: allItems.length
+          };
         }
-      );
 
-      const raw = await res.text();
-      let payload;
-
-      try {
-        payload = JSON.parse(raw);
-      } catch {
-        payload = null;
-      }
-
-      const arrayKey = ["data", "results", "items", "gifts", "usernames", "numbers"]
-        .find(key => Array.isArray(payload?.[key]));
-
-      const items = Array.isArray(payload)
-        ? payload
-        : arrayKey
-          ? payload[arrayKey]
+        const items = Array.isArray(payload?.items)
+          ? payload.items
           : [];
 
+        allItems.push(...items);
+
+        cursor = payload?.cursor || null;
+        pages++;
+
+        if (!cursor || items.length === 0) break;
+      }
+
+      const uniqueItems = [
+        ...new Map(
+          allItems.map(item => [item.nft_address, item])
+        ).values()
+      ];
+
       return {
-  status: res.status,
-  item_count: items.length,
-  first_item: items[0] || null,
-  next_cursor: payload?.cursor || null,
-  items: items.slice(0, 30)
-};
+        status: 200,
+        item_count: uniqueItems.length,
+        pages_loaded: pages,
+        first_item: uniqueItems[0] || null,
+        items: uniqueItems
+      };
+
     } catch (error) {
-      return { error: String(error?.message || error) };
+      return {
+        error: String(error?.message || error)
+      };
     }
   }
 
@@ -814,7 +837,6 @@ if (path === "/api/marketapp/inspect" && method === "GET") {
     usernames
   }, 200, cors);
 }
-
       // ADMIN ROUTES
 
       if (path.startsWith("/api/admin/")) {
