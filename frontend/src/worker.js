@@ -749,19 +749,8 @@ if (path === "/api/stars/prices" && method === "GET") {
   }, 200, cors);
 }
 
-      // ADMIN ROUTES
-
-      if (path.startsWith("/api/admin/")) {
-        const admin = await getAdmin(request, env);
-
-        if (!admin) {
-          return response({
-            error: "Admin access denied"
-          }, 403, cors);
-        }
-        // MARKETAPP RENT CATALOG INSPECTION
-
-if (path === "/api/admin/marketapp/inspect" && method === "GET") {
+// MARKETAPP RENT CATALOG INSPECTION
+if (path === "/api/marketapp/inspect" && method === "GET") {
   const token = env.MARKETAPP_API_TOKEN;
 
   if (!token) {
@@ -783,17 +772,13 @@ if (path === "/api/admin/marketapp/inspect" && method === "GET") {
       );
 
       const raw = await res.text();
-
       let payload;
+
       try {
         payload = JSON.parse(raw);
       } catch {
         payload = null;
       }
-
-      const keys = payload && typeof payload === "object"
-        ? Object.keys(payload)
-        : [];
 
       const arrayKey = ["data", "results", "items", "gifts", "usernames", "numbers"]
         .find(key => Array.isArray(payload?.[key]));
@@ -806,15 +791,11 @@ if (path === "/api/admin/marketapp/inspect" && method === "GET") {
 
       return {
         status: res.status,
-        root_keys: keys,
-        array_key: arrayKey,
         item_count: items.length,
         first_item: items[0] || null
       };
     } catch (error) {
-      return {
-        error: String(error?.message || error)
-      };
+      return { error: String(error?.message || error) };
     }
   }
 
@@ -831,6 +812,18 @@ if (path === "/api/admin/marketapp/inspect" && method === "GET") {
     usernames
   }, 200, cors);
 }
+
+      // ADMIN ROUTES
+
+      if (path.startsWith("/api/admin/")) {
+        const admin = await getAdmin(request, env);
+
+        if (!admin) {
+          return response({
+            error: "Admin access denied"
+          }, 403, cors);
+        }
+
   
         // PUBLIC STARS PRICES
 
