@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import {
   Search, Gift, User, ShoppingBag, ChevronRight,
   ArrowLeft, ShieldCheck, Headphones, Crown,
-  RefreshCw, Plus, Trash2, Pencil, Eye, EyeOff
+  RefreshCw, Plus, Trash2, Pencil, Eye, EyeOff, Star
 } from "lucide-react";
 
 const API = (
@@ -67,6 +67,22 @@ type Order = {
   created_at: string;
 };
 
+type StarsPrice = {
+  stars_amount: number;
+  price_usd: number;
+};
+
+type StarsOrder = {
+  id: number;
+  user_telegram_id: string;
+  username: string | null;
+  first_name: string | null;
+  stars_amount: number;
+  price_usd: number;
+  status: string;
+  created_at: string;
+};
+
 function App() {
   const initData = window.Telegram?.WebApp?.initData || "";
 
@@ -91,6 +107,17 @@ function App() {
   const [adminOrders, setAdminOrders] = useState<Order[]>([]);
   const [orderView, setOrderView] = useState<OrderView>("pending");
   const [myOrders, setMyOrders] = useState<Order[]>([]);
+
+  const [starsPrices, setStarsPrices] = useState<StarsPrice[]>([]);
+  const [starsOrders, setStarsOrders] = useState<StarsOrder[]>([]);
+  const [adminStarsOrders, setAdminStarsOrders] = useState<StarsOrder[]>([]);
+  const [selectedStarsAmount, setSelectedStarsAmount] = useState(50);
+  const [starsView, setStarsView] = useState<OrderView>("pending");
+  const [starsPriceInputs, setStarsPriceInputs] =
+    useState<Record<number, string>>({});
+  const [starsLoading, setStarsLoading] = useState(false);
+  const [starsSubmitting, setStarsSubmitting] = useState(false);
+  const [starsPriceSaving, setStarsPriceSaving] = useState<number | null>(null);
 
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [myOrdersLoading, setMyOrdersLoading] = useState(false);
@@ -158,6 +185,7 @@ function App() {
     window.Telegram?.WebApp?.expand();
 
     void loadListings();
+    void loadStarsPrices();
     void checkAdmin();
   }, []);
 
@@ -184,6 +212,197 @@ function App() {
       );
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadStarsPrices() {
+    try {
+      const response = await fetch(`${API}/api/stars/prices`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Не удалось загрузить цены Stars");
+      }
+
+      const prices: StarsPrice[] = Array.isArray(data.prices)
+        ? data.prices
+        : [];
+
+      setStarsPrices(prices);
+
+      setStarsPriceInputs(
+        Object.fromEntries(
+          prices.map(item => [
+            item.stars_amount,
+            String(item.price_usd)
+          ])
+        )
+      );
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : "Ошибка загрузки цен Stars"
+      );
+    }
+  }
+
+  async function loadMyStarsOrders() {
+    if (!initData) return;
+
+    try {
+      const response = await fetch(`${API}/api/stars/orders`, {
+        headers
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Не удалось загрузить заявки Stars");
+      }
+
+      setStarsOrders(Array.isArray(data.orders) ? data.orders : []);
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : "Ошибка загрузки заявок Stars"
+      );
+    }
+  }
+
+  async function createStarsOrder() {
+    if (!initData) {
+      setMessage("Открой магазин через Telegram.");
+      return;
+    }
+
+    setStarsSubmitting(true);
+    setMessage("");
+
+    try {
+      const response = await fetch(`${API}/api/stars/orders`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          stars_amount: selectedStarsAmount
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Не удалось отправить заявку");
+      }
+
+      setMessage(
+        `Заявка на ${selectedStarsAmount} Stars №${data.order_id} отправлена администрации.`
+      );
+
+      await loadMyStarsOrders();
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : "Ошибка отправки заявки"
+      );
+    } finally {
+      setStarsSubmitting(false);
+    }
+  }
+
+  async function loadAdminStarsOrders(view: OrderView = starsView) {
+    setStarsLoading(true);
+
+    try {
+      const response = await fetch(
+        `${API}/api/admin/stars-orders?view=${view}`,
+        { headers }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Не удалось загрузить заявки Stars");
+      }
+
+      setAdminStarsOrders(
+        Array.isArray(data.orders) ? data.orders : []
+      );
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : "Ошибка загрузки заявок Stars"
+      );
+    } finally {
+      setStarsLoading(false);
+    }
+  }
+
+  async function changeStarsView(view: OrderView) {
+    setStarsView(view);
+    await loadAdminStarsOrders(view);
+  }
+
+  async function updateStarsOrderStatus(
+    id: number,
+    status: "ACCEPTED" | "REJECTED" | "COMPLETED"
+  ) {
+    try {
+      const response = await fetch(
+        `${API}/api/admin/stars-orders/${id}`,
+        {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ status })
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Не удалось изменить заявку");
+      }
+
+      setAdminStarsOrders(current =>
+        current.filter(order => order.id !== id)
+      );
+
+      setMessage(`Заявка Stars №${id}: ${statusLabel(status)}.`);
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : "Ошибка изменения заявки"
+      );
+    }
+  }
+
+  async function saveStarsPrice(amount: number) {
+    const price = Number(starsPriceInputs[amount]);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      setMessage("Укажи корректную цену больше нуля.");
+      return;
+    }
+
+    setStarsPriceSaving(amount);
+
+    try {
+      const response = await fetch(`${API}/api/admin/stars-prices`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          stars_amount: amount,
+          price_usd: price
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Не удалось сохранить цену");
+      }
+
+      setMessage(`Цена пакета ${amount} Stars обновлена.`);
+      await loadStarsPrices();
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : "Ошибка сохранения цены"
+      );
+    } finally {
+      setStarsPriceSaving(null);
     }
   }
 
@@ -330,7 +549,6 @@ function App() {
         throw new Error(data.error || "Не удалось изменить заявку");
       }
 
-      // Убираем заявку из текущего раздела сразу после успешного ответа.
       setAdminOrders(current =>
         current.filter(order => order.id !== id)
       );
@@ -649,6 +867,7 @@ function App() {
   function openProfile() {
     setTab("profile");
     void loadMyOrders();
+    void loadMyStarsOrders();
   }
 
   const filteredItems = items.filter(item => {
@@ -663,6 +882,11 @@ function App() {
   });
 
   const totalPrice = selectedOption?.price || 0;
+
+  const selectedStarsPrice =
+    starsPrices.find(
+      item => item.stars_amount === selectedStarsAmount
+    )?.price_usd ?? 0;
 
   return (
     <div className="app">
@@ -692,7 +916,10 @@ function App() {
               if (next) {
                 await loadAdminListings();
                 await loadAdminOrders("pending");
+                await loadStarsPrices();
+                await loadAdminStarsOrders("pending");
                 setOrderView("pending");
+                setStarsView("pending");
               }
             }}
           >
@@ -823,6 +1050,155 @@ function App() {
                     onClick={() =>
                       updateOrderStatus(order.id, "REJECTED")
                     }
+                  >
+                    Отклонить
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+
+          <div className="detail-card">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">TELEGRAM STARS</span>
+                <h2>Цены на Stars</h2>
+              </div>
+              <Star size={23} />
+            </div>
+
+            <p className="small-note">
+              Изменяй стоимость пакетов. Новые цены будут отображаться в магазине.
+            </p>
+
+            {starsPrices.map(item => (
+              <div className="detail-card" key={item.stars_amount}>
+                <strong>{item.stars_amount.toLocaleString("ru-RU")} Stars</strong>
+
+                <label>Цена в долларах ($)</label>
+                <input
+                  className="admin-input"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={starsPriceInputs[item.stars_amount] ?? ""}
+                  onChange={e =>
+                    setStarsPriceInputs(current => ({
+                      ...current,
+                      [item.stars_amount]: e.target.value
+                    }))
+                  }
+                />
+
+                <button
+                  className="primary-button"
+                  disabled={starsPriceSaving === item.stars_amount}
+                  onClick={() => saveStarsPrice(item.stars_amount)}
+                >
+                  {starsPriceSaving === item.stars_amount
+                    ? "Сохраняем..."
+                    : "Сохранить цену"}
+                </button>
+              </div>
+            ))}
+
+            {starsPrices.length === 0 && (
+              <div className="empty-state">
+                Цены Stars пока не загрузились.
+                <button className="text-button" onClick={loadStarsPrices}>
+                  <RefreshCw size={15} /> Обновить
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">STARS ORDERS</span>
+              <h2>Заявки на Stars</h2>
+            </div>
+
+            <button
+              className="text-button"
+              onClick={() => loadAdminStarsOrders()}
+            >
+              <RefreshCw size={16} />
+              Обновить
+            </button>
+          </div>
+
+          <div className="category-list">
+            <button
+              className={starsView === "pending" ? "category active" : "category"}
+              onClick={() => changeStarsView("pending")}
+            >
+              Новые
+            </button>
+
+            <button
+              className={starsView === "active" ? "category active" : "category"}
+              onClick={() => changeStarsView("active")}
+            >
+              Активные
+            </button>
+
+            <button
+              className={starsView === "history" ? "category active" : "category"}
+              onClick={() => changeStarsView("history")}
+            >
+              История
+            </button>
+          </div>
+
+          {starsLoading && (
+            <div className="empty-state">Загружаем заявки Stars...</div>
+          )}
+
+          {!starsLoading && adminStarsOrders.length === 0 && (
+            <div className="empty-state">
+              Заявок Stars в этом разделе пока нет.
+            </div>
+          )}
+
+          {adminStarsOrders.map(order => (
+            <div className="detail-card" key={order.id}>
+              <h3>Заявка Stars №{order.id}</h3>
+              <p><b>Пакет:</b> {order.stars_amount.toLocaleString("ru-RU")} Stars</p>
+              <p><b>Цена:</b> ${Number(order.price_usd).toFixed(2)}</p>
+              <p><b>Имя:</b> {order.first_name || "Не указано"}</p>
+              <p><b>Username:</b> {order.username ? `@${order.username}` : "Не указан"}</p>
+              <p><b>Telegram ID:</b> {order.user_telegram_id}</p>
+              <p><b>Статус:</b> {statusLabel(order.status)}</p>
+              <p><b>Дата:</b> {formatDate(order.created_at)}</p>
+
+              {(order.status === "NEW" || order.status === "PENDING") && (
+                <div className="category-list">
+                  <button
+                    className="primary-button"
+                    onClick={() => updateStarsOrderStatus(order.id, "ACCEPTED")}
+                  >
+                    Принять
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() => updateStarsOrderStatus(order.id, "REJECTED")}
+                  >
+                    Отклонить
+                  </button>
+                </div>
+              )}
+
+              {order.status === "ACCEPTED" && (
+                <div className="category-list">
+                  <button
+                    className="primary-button"
+                    onClick={() => updateStarsOrderStatus(order.id, "COMPLETED")}
+                  >
+                    Завершить
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() => updateStarsOrderStatus(order.id, "REJECTED")}
                   >
                     Отклонить
                   </button>
@@ -1366,6 +1742,112 @@ function App() {
               </>
             )}
 
+            {tab === "stars" && (
+              <>
+                <div className="section-heading">
+                  <div>
+                    <span className="eyebrow">TELEGRAM DIGITAL GOODS</span>
+                    <h2>Telegram Stars</h2>
+                  </div>
+                  <Star size={28} />
+                </div>
+
+                <div className="detail-card">
+                  <div className="hero-decoration">
+                    <Star size={55} />
+                  </div>
+                  <h2>Покупка Stars</h2>
+                  <p>
+                    Выбери пакет Telegram Stars. После отправки заявки
+                    администрация свяжется с тобой для согласования заказа.
+                  </p>
+                </div>
+
+                <div className="section-heading">
+                  <h2>Выбери пакет</h2>
+                  <button
+                    className="text-button"
+                    onClick={loadStarsPrices}
+                  >
+                    <RefreshCw size={15} /> Обновить
+                  </button>
+                </div>
+
+                {starsPrices.length === 0 ? (
+                  <div className="empty-state">
+                    Не удалось загрузить пакеты Stars.
+                    <button className="text-button" onClick={loadStarsPrices}>
+                      Попробовать снова
+                    </button>
+                  </div>
+                ) : (
+                  <div className="product-grid">
+                    {starsPrices.map(item => (
+                      <button
+                        key={item.stars_amount}
+                        className="product-card"
+                        onClick={() =>
+                          setSelectedStarsAmount(item.stars_amount)
+                        }
+                        style={{
+                          border: selectedStarsAmount === item.stars_amount
+                            ? "2px solid #a78bfa"
+                            : undefined
+                        }}
+                      >
+                        <div className="product-image">
+                          <Star size={48} />
+                          <span className="product-tag">STARS</span>
+                        </div>
+                        <div className="product-info">
+                          <span>Telegram Stars</span>
+                          <strong>
+                            {item.stars_amount.toLocaleString("ru-RU")} Stars
+                          </strong>
+                          <div className="product-price">
+                            ${Number(item.price_usd).toFixed(2)}
+                          </div>
+                          {selectedStarsAmount === item.stars_amount && (
+                            <span>✓ Выбрано</span>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {starsPrices.length > 0 && (
+                  <div className="detail-card">
+                    <span className="eyebrow">YOUR ORDER</span>
+                    <h2>
+                      {selectedStarsAmount.toLocaleString("ru-RU")} Stars
+                    </h2>
+
+                    <div className="total">
+                      <span>Стоимость</span>
+                      <strong>${Number(selectedStarsPrice).toFixed(2)}</strong>
+                    </div>
+
+                    <button
+                      className="primary-button"
+                      disabled={starsSubmitting || !selectedStarsPrice}
+                      onClick={createStarsOrder}
+                    >
+                      {starsSubmitting
+                        ? "Отправляем заявку..."
+                        : "Оставить заявку"}
+                      <ChevronRight size={18} />
+                    </button>
+
+                    <p className="small-note">
+                      Это заявка на заказ, а не автоматическая оплата.
+                      Детали выполнения согласовываются с администрацией.
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+
             {tab === "profile" && (
               <>
                 <div className="section-heading">
@@ -1387,7 +1869,7 @@ function App() {
                 </div>
 
                 <div className="section-heading">
-                  <h2>Мои заявки</h2>
+                  <h2>Мои заявки на аренду</h2>
 
                   <button
                     className="text-button"
@@ -1406,7 +1888,7 @@ function App() {
 
                 {!myOrdersLoading && myOrders.length === 0 && (
                   <div className="empty-state">
-                    У вас пока нет заявок.
+                    Заявок на аренду пока нет.
                   </div>
                 )}
 
@@ -1419,6 +1901,38 @@ function App() {
                       order.category === "premium"
                     )}</p>
                     <p><b>Сумма:</b> {order.amount} {order.currency}</p>
+                    <p><b>Статус:</b> {statusLabel(order.status)}</p>
+                    <p><b>Дата:</b> {formatDate(order.created_at)}</p>
+                  </div>
+                ))}
+
+                <div className="section-heading">
+                  <h2>Мои заявки Stars</h2>
+                  <button
+                    className="text-button"
+                    onClick={loadMyStarsOrders}
+                  >
+                    <RefreshCw size={15} />
+                    Обновить
+                  </button>
+                </div>
+
+                {starsOrders.length === 0 && (
+                  <div className="empty-state">
+                    Заявок на Stars пока нет.
+                  </div>
+                )}
+
+                {starsOrders.map(order => (
+                  <div className="detail-card" key={order.id}>
+                    <h3>Заявка Stars №{order.id}</h3>
+                    <p>
+                      <b>Пакет:</b>{" "}
+                      {order.stars_amount.toLocaleString("ru-RU")} Stars
+                    </p>
+                    <p>
+                      <b>Цена:</b> ${Number(order.price_usd).toFixed(2)}
+                    </p>
                     <p><b>Статус:</b> {statusLabel(order.status)}</p>
                     <p><b>Дата:</b> {formatDate(order.created_at)}</p>
                   </div>
@@ -1471,6 +1985,17 @@ function App() {
             >
               <Gift size={20} />
               <span>Маркет</span>
+            </button>
+
+            <button
+              className={tab === "stars" ? "nav-item active" : "nav-item"}
+              onClick={() => {
+                setTab("stars");
+                void loadStarsPrices();
+              }}
+            >
+              <Star size={20} />
+              <span>Stars</span>
             </button>
 
             <button
@@ -1604,4 +2129,3 @@ function ProductCard({
 }
 
 export default App;
-
