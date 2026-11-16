@@ -1,4 +1,4 @@
- const allowedOrigins = [
+const allowedOrigins = [
   "https://fexxxxyuiop.github.io",
   "https://web.telegram.org",
   "https://t.me"
@@ -33,7 +33,6 @@ async function verifyTelegram(initData, botToken) {
 
   const params = new URLSearchParams(initData);
   const hash = params.get("hash");
-
   if (!hash) return null;
 
   params.delete("hash");
@@ -156,11 +155,6 @@ async function ensureCurrencyColumn(env) {
         UPDATE rental_options
         SET currency = 'USDT'
         WHERE currency = 'USD'
-      `).run();
-
-      await env.DB.prepare(`
-        DELETE FROM rental_options
-        WHERE currency = 'TON'
       `).run();
     })().catch(error => {
       currencyMigrationPromise = null;
@@ -287,16 +281,10 @@ async function getOrCreateUser(env, telegramUser) {
     ON CONFLICT(telegram_id) DO UPDATE SET
       username = excluded.username,
       first_name = excluded.first_name
-  `).bind(
-    telegramId,
-    username,
-    firstName
-  ).run();
+  `).bind(telegramId, username, firstName).run();
 
   const dbUser = await env.DB.prepare(`
-    SELECT id
-    FROM users
-    WHERE telegram_id = ?
+    SELECT id FROM users WHERE telegram_id = ?
   `).bind(telegramId).first();
 
   if (!dbUser?.id) {
@@ -310,6 +298,7 @@ async function getOrCreateUser(env, telegramUser) {
     firstName
   };
 }
+
 // TELEGRAM STARS ORDERS
 
 async function ensureStarsOrdersTable(env) {
@@ -343,6 +332,22 @@ const STARS_PACKAGES = {
   5000: 85.00,
   10000: 170.00
 };
+
+async function ensureStarsPricesTable(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS stars_prices (
+      stars_amount INTEGER PRIMARY KEY,
+      price_usd REAL NOT NULL
+    )
+  `).run();
+
+  for (const [amount, price] of Object.entries(STARS_PACKAGES)) {
+    await env.DB.prepare(`
+      INSERT OR IGNORE INTO stars_prices (stars_amount, price_usd)
+      VALUES (?, ?)
+    `).bind(Number(amount), price).run();
+  }
+}
 
 // TELEGRAM NOTIFICATIONS
 
@@ -440,30 +445,7 @@ function marketImage(item) {
   return "";
 }
 
-async function syncMarketAppBatch(env) {
-  if (!env.MARKETAPP_API_TOKEN) {
-    return {
-      ok: false,
-      error: "MARKETAPP_API_TOKEN is missing"
-    };
-  }
-
-  await ensureMarketAppTables(env);
-
-  const last = await env.DB.prepare(`
-    SELECT value
-    FROM marketapp_sync_state
-    WHERE key = 'last_category'
-  `).first();
-
-  const previousIndex = MARKETAPP_CATEGORIES.findIndex(
-    item => item.key === last?.value
-  );
-
-  const category = MARKETAPP_CATEGORIES[
-    (previousIndex + 1) % MARKETAPP_CATEGORIES.length
-  ];
-
+async function syncMarketAppCategory(env, category) {
   const cursorRow = await env.DB.prepare(`
     SELECT value
     FROM marketapp_sync_state
@@ -488,7 +470,13 @@ async function syncMarketAppBatch(env) {
     }
   });
 
-  const payload = await apiResponse.json();
+  let payload;
+
+  try {
+    payload = await apiResponse.json();
+  } catch {
+    payload = {};
+  }
 
   if (!apiResponse.ok) {
     return {
@@ -505,10 +493,15 @@ async function syncMarketAppBatch(env) {
 
   let imported = 0;
   let duplicates = 0;
+  let skipped = 0;
 
   for (const item of items) {
     const externalId = marketItemId(item);
-    if (!externalId) continue;
+
+    if (!externalId) {
+      skipped++;
+      continue;
+    }
 
     const existing = await env.DB.prepare(`
       SELECT id
@@ -603,13 +596,6 @@ async function syncMarketAppBatch(env) {
 
   await env.DB.prepare(`
     INSERT INTO marketapp_sync_state (key, value)
-    VALUES ('last_category', ?)
-    ON CONFLICT(key)
-    DO UPDATE SET value = excluded.value
-  `).bind(category.key).run();
-
-  await env.DB.prepare(`
-    INSERT INTO marketapp_sync_state (key, value)
     VALUES (?, ?)
     ON CONFLICT(key)
     DO UPDATE SET value = excluded.value
@@ -624,7 +610,47 @@ async function syncMarketAppBatch(env) {
     received: items.length,
     imported,
     duplicates,
+    skipped,
     has_more: Boolean(payload.cursor)
+  };
+}
+
+async function syncMarketAppBatch(env) {
+  if (!env.MARKETAPP_API_TOKEN) {
+    return {
+      ok: false,
+      error: "MARKETAPP_API_TOKEN is missing"
+    };
+  }
+
+  await ensureMarketAppTables(env);
+
+  const results = [];
+
+  // Все три категории синхронизируются последовательно.
+  for (const category of MARKETAPP_CATEGORIES) {
+    try {
+      results.push(await syncMarketAppCategory(env, category));
+    } catch (error) {
+      results.push({
+        ok: false,
+        category: category.key,
+        error: String(error?.message || error)
+      });
+    }
+  }
+
+  return {
+    ok: results.every(item => item.ok),
+    received: results.reduce(
+      (sum, item) => sum + Number(item.received || 0),
+      0
+    ),
+    imported: results.reduce(
+      (sum, item) => sum + Number(item.imported || 0),
+      0
+    ),
+    categories: results
   };
 }
 // MAIN WORKER
@@ -644,8 +670,6 @@ export default {
     }
 
     try {
-      // HEALTH CHECK
-
       if (path === "/health") {
         return response({
           ok: true,
@@ -685,15 +709,10 @@ export default {
         }, 200, cors);
       }
 
-      // SINGLE LISTING
-
       const listingMatch = path.match(/^\/api\/listings\/(\d+)$/);
 
       if (listingMatch && method === "GET") {
-        const item = await getListing(
-          env,
-          Number(listingMatch[1])
-        );
+        const item = await getListing(env, Number(listingMatch[1]));
 
         if (!item || item.status !== "APPROVED") {
           return response({
@@ -724,12 +743,9 @@ export default {
         await ensureOrdersTable(env);
 
         const body = await request.json();
-
         const listingId = Number(body.listing_id);
         const durationDays = Number(body.duration_days);
-        const currency = String(body.currency || "")
-          .trim()
-          .toUpperCase();
+        const currency = String(body.currency || "").trim().toUpperCase();
 
         if (
           !Number.isInteger(listingId) ||
@@ -801,7 +817,6 @@ export default {
         ).run();
 
         const orderId = result.meta.last_row_id;
-
         const admins = (env.ADMIN_IDS || "")
           .split(",")
           .map(id => id.trim())
@@ -818,11 +833,7 @@ export default {
           `Telegram ID: ${dbUser.telegramId}`;
 
         for (const adminId of admins) {
-          await sendTelegramMessage(
-            env,
-            adminId,
-            notification
-          );
+          await sendTelegramMessage(env, adminId, notification);
         }
 
         return response({
@@ -860,234 +871,216 @@ export default {
           orders: result.results || []
         }, 200, cors);
       }
-      
-async function ensureStarsPricesTable(env) {
-  await env.DB.prepare(`
-    CREATE TABLE IF NOT EXISTS stars_prices (
-      stars_amount INTEGER PRIMARY KEY,
-      price_usd REAL NOT NULL
-    )
-  `).run();
 
-  for (const [amount, price] of Object.entries(STARS_PACKAGES)) {
-    await env.DB.prepare(`
-      INSERT OR IGNORE INTO stars_prices (stars_amount, price_usd)
-      VALUES (?, ?)
-    `).bind(Number(amount), price).run();
-  }
-}
+      // STARS ORDERS
 
-      
-// TELEGRAM STARS ORDER ROUTES
-      
-if (path === "/api/stars/orders" && method === "POST") {
-  
-const STARS_PACKAGES = {
-  50: 1.10,
-  75: 1.50,
-  100: 2.00,
-  150: 2.75,
-  250: 4.10,
-  350: 5.75,
-  500: 8.00,
-  750: 11.75,
-  1000: 17.00,
-  1500: 23.00,
-  2500: 40.00,
-  5000: 85.00,
-  10000: 170.00
-};
+      if (path === "/api/stars/orders" && method === "POST") {
+        const telegramUser = await verifyTelegram(
+          request.headers.get("X-Telegram-Init-Data"),
+          env.BOT_TOKEN
+        );
 
-  const telegramUser = await verifyTelegram(
-    request.headers.get("X-Telegram-Init-Data"),
-    env.BOT_TOKEN
-  );
-
-  if (!telegramUser?.id) {
-    return response({ error: "Telegram authorization required" }, 401, cors);
-  }
-
-  await ensureStarsOrdersTable(env);
-
-  const body = await request.json();
-const starsAmount = Number(body.stars_amount);
-
-await ensureStarsPricesTable(env);
-
-const priceRow = await env.DB.prepare(`
-  SELECT price_usd
-  FROM stars_prices
-  WHERE stars_amount = ?
-`).bind(starsAmount).first();
-
-const price = priceRow ? Number(priceRow.price_usd) : null;
-
-  if (!price) {
-    return response({ error: "Invalid Stars package" }, 400, cors);
-  }
-
-  const result = await env.DB.prepare(`
-    INSERT INTO stars_orders (
-      user_telegram_id, username, first_name, stars_amount, price_usd
-    ) VALUES (?, ?, ?, ?, ?)
-  `).bind(
-    String(telegramUser.id),
-    telegramUser.username || null,
-    telegramUser.first_name || null,
-    starsAmount,
-    price
-  ).run();
-
-  const orderId = result.meta.last_row_id;
-  const admins = (env.ADMIN_IDS || "")
-    .split(",")
-    .map(id => id.trim())
-    .filter(Boolean);
-
-  const notification =
-    `НОВАЯ ЗАЯВКА НА STARS №${orderId}\n\n` +
-    `Пакет: ${starsAmount} Stars\n` +
-    `Цена: $${price.toFixed(2)}\n` +
-    `Имя: ${escapeText(telegramUser.first_name || "не указано")}\n` +
-    `Username: @${escapeText(telegramUser.username || "не указан")}\n` +
-    `Telegram ID: ${telegramUser.id}`;
-
-  for (const adminId of admins) {
-    await sendTelegramMessage(env, adminId, notification);
-  }
-
-  return response({
-    ok: true,
-    order_id: orderId,
-    stars_amount: starsAmount,
-    price_usd: price
-  }, 201, cors);
-}
-
-if (path === "/api/stars/orders" && method === "GET") {
-  const telegramUser = await verifyTelegram(
-    request.headers.get("X-Telegram-Init-Data"),
-    env.BOT_TOKEN
-  );
-
-  if (!telegramUser?.id) {
-    return response({ error: "Telegram authorization required" }, 401, cors);
-  }
-
-  await ensureStarsOrdersTable(env);
-
-  const result = await env.DB.prepare(`
-    SELECT * FROM stars_orders
-    WHERE user_telegram_id = ?
-    ORDER BY id DESC
-  `).bind(String(telegramUser.id)).all();
-
-  return response({ orders: result.results || [] }, 200, cors);
-}
-      // PUBLIC STARS PRICES
-
-if (path === "/api/stars/prices" && method === "GET") {
-  await ensureStarsPricesTable(env);
-
-  const result = await env.DB.prepare(`
-    SELECT stars_amount, price_usd
-    FROM stars_prices
-    ORDER BY stars_amount ASC
-  `).all();
-
-  return response({
-    prices: result.results || []
-  }, 200, cors);
-}
-
-// MARKETAPP RENT CATALOG INSPECTION
-if (path === "/api/marketapp/inspect" && method === "GET") {
-  const token = env.MARKETAPP_API_TOKEN;
-
-  if (!token) {
-    return response({
-      error: "MARKETAPP_API_TOKEN secret is missing"
-    }, 500, cors);
-  }
-
-    async function inspect(endpoint) {
-    try {
-      let allItems = [];
-      let cursor = null;
-      let pages = 0;
-
-      while (pages < 20) {
-        const url = new URL(`https://api.marketapp.org${endpoint}`);
-        url.searchParams.set("limit", "100");
-        url.searchParams.set("include_sellable", "false");
-
-        if (cursor) {
-          url.searchParams.set("cursor", cursor);
+        if (!telegramUser?.id) {
+          return response({
+            error: "Telegram authorization required"
+          }, 401, cors);
         }
 
-        const res = await fetch(url.toString(), {
-          headers: {
-            "Authorization": token,
-            "Accept": "application/json"
-          }
-        });
+        await ensureStarsOrdersTable(env);
 
-        const payload = await res.json();
+        const body = await request.json();
+        const starsAmount = Number(body.stars_amount);
 
-        if (!res.ok) {
-          return {
-            status: res.status,
-            error: payload?.detail || "MarketApp API error",
-            item_count: allItems.length
-          };
+        await ensureStarsPricesTable(env);
+
+        const priceRow = await env.DB.prepare(`
+          SELECT price_usd
+          FROM stars_prices
+          WHERE stars_amount = ?
+        `).bind(starsAmount).first();
+
+        const price = priceRow ? Number(priceRow.price_usd) : null;
+
+        if (!price || !Number.isFinite(price) || price <= 0) {
+          return response({
+            error: "Invalid Stars package"
+          }, 400, cors);
         }
 
-        const items = Array.isArray(payload?.items)
-          ? payload.items
-          : [];
+        const result = await env.DB.prepare(`
+          INSERT INTO stars_orders (
+            user_telegram_id, username, first_name, stars_amount, price_usd
+          ) VALUES (?, ?, ?, ?, ?)
+        `).bind(
+          String(telegramUser.id),
+          telegramUser.username || null,
+          telegramUser.first_name || null,
+          starsAmount,
+          price
+        ).run();
 
-        allItems.push(...items);
+        const orderId = result.meta.last_row_id;
+        const admins = (env.ADMIN_IDS || "")
+          .split(",")
+          .map(id => id.trim())
+          .filter(Boolean);
 
-        cursor = payload?.cursor || null;
-        pages++;
+        const notification =
+          `НОВАЯ ЗАЯВКА НА STARS №${orderId}\n\n` +
+          `Пакет: ${starsAmount} Stars\n` +
+          `Цена: $${price.toFixed(2)}\n` +
+          `Имя: ${escapeText(telegramUser.first_name || "не указано")}\n` +
+          `Username: @${escapeText(telegramUser.username || "не указан")}\n` +
+          `Telegram ID: ${telegramUser.id}`;
 
-        if (!cursor || items.length === 0) break;
+        for (const adminId of admins) {
+          await sendTelegramMessage(env, adminId, notification);
+        }
+
+        return response({
+          ok: true,
+          order_id: orderId,
+          stars_amount: starsAmount,
+          price_usd: price
+        }, 201, cors);
       }
 
-      const uniqueItems = [
-        ...new Map(
-          allItems.map(item => [item.nft_address, item])
-        ).values()
-      ];
+      if (path === "/api/stars/orders" && method === "GET") {
+        const telegramUser = await verifyTelegram(
+          request.headers.get("X-Telegram-Init-Data"),
+          env.BOT_TOKEN
+        );
 
-      return {
-        status: 200,
-        item_count: uniqueItems.length,
-        pages_loaded: pages,
-        first_item: uniqueItems[0] || null,
-        items: uniqueItems
-      };
+        if (!telegramUser?.id) {
+          return response({
+            error: "Telegram authorization required"
+          }, 401, cors);
+        }
 
-    } catch (error) {
-      return {
-        error: String(error?.message || error)
-      };
-    }
-  }
+        await ensureStarsOrdersTable(env);
 
-  const [gifts, numbers, usernames] = await Promise.all([
-    inspect("/v1/rent/gifts/"),
-    inspect("/v1/rent/numbers/"),
-    inspect("/v1/rent/usernames/")
-  ]);
+        const result = await env.DB.prepare(`
+          SELECT * FROM stars_orders
+          WHERE user_telegram_id = ?
+          ORDER BY id DESC
+        `).bind(String(telegramUser.id)).all();
 
-  return response({
-    ok: true,
-    gifts,
-    numbers,
-    usernames
-  }, 200, cors);
-}
+        return response({
+          orders: result.results || []
+        }, 200, cors);
+      }
+
+      // PUBLIC STARS PRICES
+
+      if (path === "/api/stars/prices" && method === "GET") {
+        await ensureStarsPricesTable(env);
+
+        const result = await env.DB.prepare(`
+          SELECT stars_amount, price_usd
+          FROM stars_prices
+          ORDER BY stars_amount ASC
+        `).all();
+
+        return response({
+          prices: result.results || []
+        }, 200, cors);
+      }
+
+      // MARKETAPP INSPECTION
+
+      if (path === "/api/marketapp/inspect" && method === "GET") {
+        const token = env.MARKETAPP_API_TOKEN;
+
+        if (!token) {
+          return response({
+            error: "MARKETAPP_API_TOKEN secret is missing"
+          }, 500, cors);
+        }
+
+        async function inspect(endpoint) {
+          try {
+            let allItems = [];
+            let cursor = null;
+            let pages = 0;
+
+            while (pages < 20) {
+              const apiUrl = new URL(
+                `https://api.marketapp.org${endpoint}`
+              );
+
+              apiUrl.searchParams.set("limit", "100");
+              apiUrl.searchParams.set("include_sellable", "false");
+
+              if (cursor) {
+                apiUrl.searchParams.set("cursor", cursor);
+              }
+
+              const res = await fetch(apiUrl.toString(), {
+                headers: {
+                  Authorization: token,
+                  Accept: "application/json"
+                }
+              });
+
+              let payload;
+
+              try {
+                payload = await res.json();
+              } catch {
+                payload = {};
+              }
+
+              if (!res.ok) {
+                return {
+                  status: res.status,
+                  error: payload?.detail || "MarketApp API error",
+                  item_count: allItems.length
+                };
+              }
+
+              const items = Array.isArray(payload?.items)
+                ? payload.items
+                : [];
+
+              allItems.push(...items);
+              cursor = payload?.cursor || null;
+              pages++;
+
+              if (!cursor || items.length === 0) break;
+            }
+
+            const uniqueItems = [
+              ...new Map(
+                allItems.map(item => [marketItemId(item), item])
+              ).values()
+            ];
+
+            return {
+              status: 200,
+              item_count: uniqueItems.length,
+              pages_loaded: pages,
+              first_item: uniqueItems[0] || null,
+              items: uniqueItems
+            };
+          } catch (error) {
+            return {
+              error: String(error?.message || error)
+            };
+          }
+        }
+
+        const gifts = await inspect("/v1/rent/gifts/");
+        const numbers = await inspect("/v1/rent/numbers/");
+        const usernames = await inspect("/v1/rent/usernames/");
+
+        return response({
+          ok: true,
+          gifts,
+          numbers,
+          usernames
+        }, 200, cors);
+      }
+
       // ADMIN ROUTES
 
       if (path.startsWith("/api/admin/")) {
@@ -1098,133 +1091,76 @@ if (path === "/api/marketapp/inspect" && method === "GET") {
             error: "Admin access denied"
           }, 403, cors);
         }
+               // MARKETAPP SYNC
 
-        
-        // MARKETAPP SAFE TEST
-        if (
-          path === "/api/admin/marketapp/sample" &&
-          method === "GET"
-        ) {
-          const token = env.MARKETAPP_API_TOKEN;
+        if (path === "/api/admin/marketapp/sync" && method === "POST") {
+          const result = await syncMarketAppBatch(env);
 
-          if (!token) {
-            return response({
-              error: "MARKETAPP_API_TOKEN secret is missing"
-            }, 500, cors);
-          }
-
-          const apiUrl = new URL(
-            "https://api.marketapp.org/v1/rent/gifts/"
-          );
-
-          apiUrl.searchParams.set("limit", "100");
-          apiUrl.searchParams.set("include_sellable", "false");
-
-          const apiResponse = await fetch(apiUrl.toString(), {
-            headers: {
-              "Authorization": token,
-              "Accept": "application/json"
-            }
+          await audit(env, admin, "MARKETAPP_SYNC", {
+            result
           });
 
-          const payload = await apiResponse.json();
+          return response(result, 200, cors);
+        }
 
-          if (!apiResponse.ok) {
-            return response({
-              error: "MarketApp API error",
-              status: apiResponse.status
-            }, 502, cors);
-          }
+        // MARKETAPP SAMPLE
 
-          const items = Array.isArray(payload.items)
-            ? payload.items
-            : [];
-
-          const target = items.find(item =>
-            String(item.nft_name || "").includes("Resistance Dog #5411")
-          );
-
-          const sample = target || items[0] || null;
+        if (path === "/api/admin/marketapp/sample" && method === "GET") {
+          const result = await fetchMarketAppSample(env);
 
           return response({
             ok: true,
-            total_on_page: items.length,
-            target_found: Boolean(target),
-            available_fields: sample
-              ? Object.keys(sample)
-              : [],
-            sample
+            sample: result
           }, 200, cors);
         }
 
-  
-        // PUBLIC STARS PRICES
-
-if (path === "/api/stars/prices" && method === "GET") {
-  await ensureStarsPricesTable(env);
-
-  const result = await env.DB.prepare(`
-    SELECT stars_amount, price_usd
-    FROM stars_prices
-    ORDER BY stars_amount ASC
-  `).all();
-
-  return response({
-    prices: result.results || []
-  }, 200, cors);
-}
-
-        // ADMIN ORDERS: PENDING / ACTIVE / HISTORY
+        // ADMIN ORDERS
 
         if (path === "/api/admin/orders" && method === "GET") {
           await ensureOrdersTable(env);
 
           const view = url.searchParams.get("view") || "pending";
 
-          let where = "";
-
-          if (view === "pending") {
-            where = "WHERE status IN ('NEW', 'PENDING')";
-          } else if (view === "active") {
-            where = "WHERE status = 'ACCEPTED'";
-          } else if (view === "history") {
-            where = "WHERE status IN ('REJECTED', 'COMPLETED')";
-          } else if (view === "all") {
-            where = "";
-          } else {
-            return response({
-              error: "Invalid order view"
-            }, 400, cors);
-          }
-
-          const result = await env.DB.prepare(`
+          let query = `
             SELECT *
             FROM orders
-            ${where}
-            ORDER BY created_at DESC
-          `).all();
+          `;
+
+          if (view === "pending") {
+            query += " WHERE status = 'PENDING'";
+          } else if (view === "active") {
+            query += " WHERE status = 'ACTIVE'";
+          } else if (view === "history") {
+            query += " WHERE status IN ('COMPLETED', 'CANCELLED')";
+          }
+
+          query += " ORDER BY created_at DESC LIMIT 200";
+
+          const result = await env.DB.prepare(query).all();
 
           return response({
             ok: true,
-            view,
             orders: result.results || []
           }, 200, cors);
         }
 
-        // CHANGE ORDER STATUS
+        // UPDATE ORDER
 
-        const orderMatch = path.match(
-          /^\/api\/admin\/orders\/(\d+)$/
-        );
+        const orderMatch = path.match(/^\/api\/admin\/orders\/(\d+)$/);
 
         if (orderMatch && method === "PATCH") {
-          await ensureOrdersTable(env);
-
-          const orderId = Number(orderMatch[1]);
+          const id = Number(orderMatch[1]);
           const body = await request.json();
-          const status = String(body.status || "");
+          const status = String(body.status || "").toUpperCase();
 
-          if (!["ACCEPTED", "REJECTED", "COMPLETED"].includes(status)) {
+          const allowed = [
+            "PENDING",
+            "ACTIVE",
+            "COMPLETED",
+            "CANCELLED"
+          ];
+
+          if (!allowed.includes(status)) {
             return response({
               error: "Invalid status"
             }, 400, cors);
@@ -1234,7 +1170,7 @@ if (path === "/api/stars/prices" && method === "GET") {
             SELECT *
             FROM orders
             WHERE id = ?
-          `).bind(orderId).first();
+          `).bind(id).first();
 
           if (!order) {
             return response({
@@ -1242,81 +1178,35 @@ if (path === "/api/stars/prices" && method === "GET") {
             }, 404, cors);
           }
 
-          // Не разрешаем завершать заявку, которая ещё не принята.
-          if (
-            status === "COMPLETED" &&
-            order.status !== "ACCEPTED"
-          ) {
-            return response({
-              error: "Only accepted orders can be completed"
-            }, 400, cors);
-          }
-
-          // Новую заявку можно принять или отклонить.
-          if (
-            ["NEW", "PENDING"].includes(order.status) &&
-            !["ACCEPTED", "REJECTED"].includes(status)
-          ) {
-            return response({
-              error: "Invalid status transition"
-            }, 400, cors);
-          }
-
-          // Принятую заявку можно завершить или отклонить.
-          if (
-            order.status === "ACCEPTED" &&
-            !["COMPLETED", "REJECTED"].includes(status)
-          ) {
-            return response({
-              error: "Invalid status transition"
-            }, 400, cors);
-          }
-
-          // Уже обработанные заявки нельзя менять повторно.
-          if (["REJECTED", "COMPLETED"].includes(order.status)) {
-            return response({
-              error: "Order is already closed"
-            }, 400, cors);
-          }
-
           await env.DB.prepare(`
             UPDATE orders
-            SET status = ?, updated_at = CURRENT_TIMESTAMP
+            SET status = ?
             WHERE id = ?
-          `).bind(status, orderId).run();
+          `).bind(status, id).run();
 
-          const statusLabels = {
-            ACCEPTED: "принята",
-            REJECTED: "отклонена",
-            COMPLETED: "выполнена"
-          };
+          await audit(env, admin, "ORDER_STATUS_UPDATED", {
+            order_id: id,
+            status
+          });
 
-          await sendTelegramMessage(
-            env,
-            order.user_telegram_id,
-            `Статус вашей заявки №${orderId}: ${statusLabels[status]}.`
-          );
-
-          await audit(
-            env,
-            admin.id,
-            "order_status",
-            `${orderId}: ${status}`
-          );
+          if (order.user_telegram_id) {
+            await sendTelegramMessage(
+              env,
+              order.user_telegram_id,
+              `Статус вашей заявки №${id} изменён: ${status}`
+            );
+          }
 
           return response({
             ok: true,
-            order_id: orderId,
+            order_id: id,
             status
           }, 200, cors);
         }
 
         // ADMIN LISTINGS
 
-        if (
-          path === "/api/admin/listings" &&
-          method === "GET"
-        ) {
+        if (path === "/api/admin/listings" && method === "GET") {
           const result = await env.DB.prepare(`
             SELECT *
             FROM listings
@@ -1338,31 +1228,25 @@ if (path === "/api/stars/prices" && method === "GET") {
 
         // CREATE LISTING
 
-        if (
-          path === "/api/admin/listings" &&
-          method === "POST"
-        ) {
+        if (path === "/api/admin/listings" && method === "POST") {
           const body = await request.json();
 
           const title = String(body.title || "").trim();
-          const category = String(body.category || "gifts").trim();
           const description = String(body.description || "").trim();
+          const category = String(body.category || "").trim();
           const imageUrl = String(body.image_url || "").trim();
-          const options = body.rental_options;
+          const price = Number(body.price || 0);
+          const currency = String(body.currency || "USDT").toUpperCase();
 
-          if (!title || !Array.isArray(options) || options.length === 0) {
+          if (
+            !title ||
+            !category ||
+            !["USDT", "RUB"].includes(currency) ||
+            !Number.isFinite(price) ||
+            price < 0
+          ) {
             return response({
-              error: "Title and rental options are required"
-            }, 400, cors);
-          }
-
-          const firstPrice = Number(
-            options[0].price_usdt ?? options[0].price ?? 0
-          );
-
-          if (!Number.isFinite(firstPrice) || firstPrice <= 0) {
-            return response({
-              error: "Invalid price"
+              error: "Invalid listing data"
             }, 400, cors);
           }
 
@@ -1373,290 +1257,232 @@ if (path === "/api/stars/prices" && method === "GET") {
               category,
               image_url,
               price,
-              rental_period,
-              status,
-              created_by
+              currency,
+              status
             )
-            VALUES (?, ?, ?, ?, ?, ?, 'APPROVED', ?)
+            VALUES (?, ?, ?, ?, ?, ?, 'APPROVED')
           `).bind(
             title,
             description,
             category,
             imageUrl,
-            firstPrice,
-            `${options[0].duration_days} days`,
-            String(admin.id)
+            price,
+            currency
           ).run();
 
-          const id = result.meta.last_row_id;
-
-          await saveOptions(env, id, options);
-          await audit(
-            env,
-            admin.id,
-            "create_listing",
-            String(id)
-          );
+          await audit(env, admin, "LISTING_CREATED", {
+            listing_id: result.meta.last_row_id
+          });
 
           return response({
             ok: true,
-            listing: await getListing(env, id)
+            id: result.meta.last_row_id
           }, 201, cors);
         }
 
-        // EDIT LISTING
+        // UPDATE LISTING
 
-        const editMatch = path.match(
+        const adminListingMatch = path.match(
           /^\/api\/admin\/listings\/(\d+)$/
         );
 
-        if (editMatch && method === "PATCH") {
-          const id = Number(editMatch[1]);
+        if (adminListingMatch && method === "PATCH") {
+          const id = Number(adminListingMatch[1]);
           const body = await request.json();
 
-          const existing = await getListing(env, id);
+          const fields = [];
+          const values = [];
 
-          if (!existing) {
-            return response({
-              error: "Not found"
-            }, 404, cors);
+          const allowedFields = [
+            "title",
+            "description",
+            "category",
+            "image_url",
+            "price",
+            "currency",
+            "status"
+          ];
+
+          for (const field of allowedFields) {
+            if (body[field] !== undefined) {
+              fields.push(`${field} = ?`);
+              values.push(body[field]);
+            }
           }
 
-          const title = String(
-            body.title ?? existing.title
-          ).trim();
-
-          const description = String(
-            body.description ?? existing.description ?? ""
-          );
-
-          const category = String(
-            body.category ?? existing.category
-          );
-
-          const imageUrl = String(
-            body.image_url ?? existing.image_url ?? ""
-          );
-
-          const status = body.status ?? existing.status;
-
-          if (!["APPROVED", "PENDING", "HIDDEN"].includes(status)) {
+          if (fields.length === 0) {
             return response({
-              error: "Invalid status"
+              error: "Nothing to update"
             }, 400, cors);
           }
 
+          values.push(id);
+
           await env.DB.prepare(`
             UPDATE listings
-            SET
-              title = ?,
-              description = ?,
-              category = ?,
-              image_url = ?,
-              status = ?,
-              updated_at = CURRENT_TIMESTAMP
+            SET ${fields.join(", ")}
             WHERE id = ?
-          `).bind(
-            title,
-            description,
-            category,
-            imageUrl,
-            status,
-            id
-          ).run();
+          `).bind(...values).run();
 
-          if (body.rental_options !== undefined) {
-            if (
-              !Array.isArray(body.rental_options) ||
-              !body.rental_options.length
-            ) {
-              return response({
-                error: "At least one rental option required"
-              }, 400, cors);
-            }
-
-            await saveOptions(
-              env,
-              id,
-              body.rental_options
-            );
-          }
-
-          await audit(
-            env,
-            admin.id,
-            "edit_listing",
-            String(id)
-          );
+          await audit(env, admin, "LISTING_UPDATED", {
+            listing_id: id
+          });
 
           return response({
-            ok: true,
-            listing: await getListing(env, id)
+            ok: true
           }, 200, cors);
         }
 
         // DELETE LISTING
 
-        if (editMatch && method === "DELETE") {
-          const id = Number(editMatch[1]);
+        if (adminListingMatch && method === "DELETE") {
+          const id = Number(adminListingMatch[1]);
 
-          const linkedOrder = await env.DB.prepare(`
-            SELECT id
-            FROM orders
+          await env.DB.prepare(`
+            DELETE FROM rental_options
             WHERE listing_id = ?
-            LIMIT 1
-          `).bind(id).first();
+          `).bind(id).run();
 
-          if (linkedOrder) {
-            await env.DB.prepare(`
-              UPDATE listings
-              SET status = 'HIDDEN',
-                  updated_at = CURRENT_TIMESTAMP
-              WHERE id = ?
-            `).bind(id).run();
-          } else {
-            await env.DB.prepare(`
-              DELETE FROM rental_options
-              WHERE listing_id = ?
-            `).bind(id).run();
+          await env.DB.prepare(`
+            DELETE FROM listings
+            WHERE id = ?
+          `).bind(id).run();
 
-            await env.DB.prepare(`
-              DELETE FROM listings
-              WHERE id = ?
-            `).bind(id).run();
+          await audit(env, admin, "LISTING_DELETED", {
+            listing_id: id
+          });
+
+          return response({
+            ok: true
+          }, 200, cors);
+        }
+
+        // STARS PRICES
+
+        if (path === "/api/admin/stars-prices" && method === "GET") {
+          await ensureStarsPricesTable(env);
+
+          const result = await env.DB.prepare(`
+            SELECT *
+            FROM stars_prices
+            ORDER BY stars_amount ASC
+          `).all();
+
+          return response({
+            ok: true,
+            prices: result.results || []
+          }, 200, cors);
+        }
+
+        if (path === "/api/admin/stars-prices" && method === "POST") {
+          await ensureStarsPricesTable(env);
+
+          const body = await request.json();
+          const starsAmount = Number(body.stars_amount);
+          const price = Number(body.price_usd);
+
+          if (
+            !Number.isInteger(starsAmount) ||
+            starsAmount < 1 ||
+            !Number.isFinite(price) ||
+            price <= 0
+          ) {
+            return response({
+              error: "Invalid price"
+            }, 400, cors);
           }
 
-          await audit(
+          await env.DB.prepare(`
+            INSERT INTO stars_prices (stars_amount, price_usd)
+            VALUES (?, ?)
+            ON CONFLICT(stars_amount)
+            DO UPDATE SET price_usd = excluded.price_usd
+          `).bind(starsAmount, price).run();
+
+          await audit(env, admin, "STARS_PRICE_UPDATED", {
+            stars_amount: starsAmount,
+            price_usd: price
+          });
+
+          return response({
+            ok: true
+          }, 200, cors);
+        }
+
+        // STARS ORDERS
+
+        if (path === "/api/admin/stars-orders" && method === "GET") {
+          await ensureStarsOrdersTable(env);
+
+          const result = await env.DB.prepare(`
+            SELECT *
+            FROM stars_orders
+            ORDER BY id DESC
+            LIMIT 200
+          `).all();
+
+          return response({
+            ok: true,
+            orders: result.results || []
+          }, 200, cors);
+        }
+
+        const starsOrderMatch = path.match(
+          /^\/api\/admin\/stars-orders\/(\d+)$/
+        );
+
+        if (starsOrderMatch && method === "PATCH") {
+          const id = Number(starsOrderMatch[1]);
+          const body = await request.json();
+          const status = String(body.status || "").toUpperCase();
+
+          const allowed = [
+            "PENDING",
+            "COMPLETED",
+            "CANCELLED"
+          ];
+
+          if (!allowed.includes(status)) {
+            return response({
+              error: "Invalid status"
+            }, 400, cors);
+          }
+
+          const order = await env.DB.prepare(`
+            SELECT *
+            FROM stars_orders
+            WHERE id = ?
+          `).bind(id).first();
+
+          if (!order) {
+            return response({
+              error: "Stars order not found"
+            }, 404, cors);
+          }
+
+          await env.DB.prepare(`
+            UPDATE stars_orders
+            SET status = ?
+            WHERE id = ?
+          `).bind(status, id).run();
+
+          await audit(env, admin, "STARS_ORDER_UPDATED", {
+            order_id: id,
+            status
+          });
+
+          await sendTelegramMessage(
             env,
-            admin.id,
-            "delete_listing",
-            String(id)
+            order.user_telegram_id,
+            `Статус вашей заявки на Stars №${id}: ${status}`
           );
 
           return response({
             ok: true,
-            deleted: id,
-            hidden: Boolean(linkedOrder)
+            order_id: id,
+            status
           }, 200, cors);
         }
-        // ADMIN STARS PRICES
-
-if (path === "/api/admin/stars-prices" && method === "GET") {
-  await ensureStarsPricesTable(env);
-
-  const result = await env.DB.prepare(`
-    SELECT stars_amount, price_usd
-    FROM stars_prices
-    ORDER BY stars_amount ASC
-  `).all();
-
-  return response({ prices: result.results || [] }, 200, cors);
-}
-
-if (path === "/api/admin/stars-prices" && method === "POST") {
-  await ensureStarsPricesTable(env);
-
-  const body = await request.json();
-  const amount = Number(body.stars_amount);
-  const price = Number(body.price_usd);
-
-  if (
-    !Object.prototype.hasOwnProperty.call(STARS_PACKAGES, amount) ||
-    !Number.isFinite(price) ||
-    price <= 0 ||
-    price > 100000
-  ) {
-    return response({ error: "Invalid price data" }, 400, cors);
-  }
-
-  await env.DB.prepare(`
-    UPDATE stars_prices
-    SET price_usd = ?
-    WHERE stars_amount = ?
-  `).bind(price, amount).run();
-
-  await audit(env, admin.id, "stars_price_update", `${amount}:${price}`);
-
-  return response({ ok: true, stars_amount: amount, price_usd: price }, 200, cors);
-}
-        
-// ADMIN STARS ORDERS
-
-if (path === "/api/admin/stars-orders" && method === "GET") {
-  await ensureStarsOrdersTable(env);
-
-  const view = url.searchParams.get("view") || "pending";
-
-  let query = `
-    SELECT * FROM stars_orders
-    WHERE status = 'PENDING'
-    ORDER BY id DESC
-  `;
-
-  if (view === "history") {
-    query = `
-      SELECT * FROM stars_orders
-      WHERE status IN ('COMPLETED', 'REJECTED')
-      ORDER BY id DESC
-    `;
-  } else if (view === "active") {
-    query = `
-      SELECT * FROM stars_orders
-      WHERE status = 'ACCEPTED'
-      ORDER BY id DESC
-    `;
-  }
-
-  const result = await env.DB.prepare(query).all();
-
-  return response({
-    orders: result.results || []
-  }, 200, cors);
-}
-
-const starsOrderMatch = path.match(/^\/api\/admin\/stars-orders\/(\d+)$/);
-
-if (starsOrderMatch && method === "PATCH") {
-  await ensureStarsOrdersTable(env);
-
-  const id = Number(starsOrderMatch[1]);
-  const body = await request.json();
-  const status = String(body.status || "").toUpperCase();
-
-  if (!["ACCEPTED", "REJECTED", "COMPLETED"].includes(status)) {
-    return response({ error: "Invalid status" }, 400, cors);
-  }
-
-  const order = await env.DB.prepare(`
-    SELECT * FROM stars_orders WHERE id = ?
-  `).bind(id).first();
-
-  if (!order) {
-    return response({ error: "Stars order not found" }, 404, cors);
-  }
-
-  await env.DB.prepare(`
-    UPDATE stars_orders
-    SET status = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).bind(status, id).run();
-
-  const messages = {
-    ACCEPTED: "Ваша заявка на Telegram Stars принята администратором.",
-    REJECTED: "Ваша заявка на Telegram Stars отклонена администратором.",
-    COMPLETED: "Ваша заявка на Telegram Stars отмечена как выполненная."
-  };
-
-  await sendTelegramMessage(
-    env,
-    order.user_telegram_id,
-    `Заявка №${id}\n${messages[status]}`
-  );
-
-  await audit(env, admin.id, "stars_order_status", `${id}:${status}`);
-
-  return response({ ok: true, order_id: id, status }, 200, cors);
-}
 
         return response({
           error: "Admin route not found"
@@ -1675,5 +1501,25 @@ if (starsOrderMatch && method === "PATCH") {
         details: String(error?.message || error)
       }, 500, cors);
     }
+  },
+
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(
+      (async () => {
+        try {
+          const result = await syncMarketAppBatch(env);
+
+          console.log(
+            "PRESTIGE MARKETAPP SYNC:",
+            JSON.stringify(result)
+          );
+        } catch (error) {
+          console.error(
+            "PRESTIGE MARKETAPP SYNC ERROR:",
+            error
+          );
+        }
+      })()
+    );
   }
 };
