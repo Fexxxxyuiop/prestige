@@ -7,3 +7,6 @@ compatibility_date = "2026-11-11"
 binding = "DB"
 database_name = "prestige-core"
 database_id = "9f76d2ed-a106-44c3-b33e-a0322041ddbc"
+
+[triggers]
+crons = ["*/30 * * * *"]
