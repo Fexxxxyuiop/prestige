@@ -6,4 +6,4 @@ compatibility_date = "2026-11-11"
 [[d1_databases]]
 binding = "DB"
 database_name = "prestige-core"
-database_id = "0000000c-00000000-00005121-8c09d5eb89131a5bc58ba039400b414a"
+database_id = "00000032-00000000-00005125-297808c48e93712b617602884e726d65"
