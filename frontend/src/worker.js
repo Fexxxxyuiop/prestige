@@ -959,6 +959,75 @@ export default {
         }, 404, cors);
       }
 
+        // MARKETAPP: READ-ONLY API INSPECTION
+        if (path === "/api/admin/marketapp/inspect" && method === "GET") {
+          const token = env.MARKETAPP_API_TOKEN;
+
+          if (!token) {
+            return response({
+              error: "MARKETAPP_API_TOKEN secret is missing"
+            }, 500, cors);
+          }
+
+          async function inspect(endpoint) {
+            try {
+              const res = await fetch(
+                `https://api.marketapp.org${endpoint}`,
+                {
+                  headers: {
+                    "Authorization": token,
+                    "Accept": "application/json"
+                  }
+                }
+              );
+
+              const payload = await res.json();
+
+              const keys = payload &&
+                typeof payload === "object" &&
+                !Array.isArray(payload)
+                  ? Object.keys(payload)
+                  : [];
+
+              const arrayKey = ["data", "results", "items", "gifts", "usernames"]
+                .find(key => Array.isArray(payload?.[key]));
+
+              const items = Array.isArray(payload)
+                ? payload
+                : arrayKey
+                  ? payload[arrayKey]
+                  : [];
+
+              return {
+                status: res.status,
+                root_type: Array.isArray(payload) ? "array" : typeof payload,
+                root_keys: keys,
+                array_key: arrayKey || null,
+                item_count: items.length,
+                first_item_keys: items[0] &&
+                  typeof items[0] === "object"
+                    ? Object.keys(items[0])
+                    : []
+              };
+            } catch (error) {
+              return {
+                error: String(error?.message || error)
+              };
+            }
+          }
+
+          const [gifts, usernames] = await Promise.all([
+            inspect("/v1/rent/gifts/"),
+            inspect("/v1/rent/usernames/")
+          ]);
+
+          return response({
+            ok: true,
+            gifts,
+            usernames
+          }, 200, cors);
+        }
+
       return response({
         error: "Not found"
       }, 404, cors);
