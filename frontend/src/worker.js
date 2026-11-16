@@ -374,7 +374,259 @@ async function sendTelegramMessage(env, chatId, message) {
 function escapeText(value) {
   return String(value || "").replace(/[<>&]/g, "");
 }
+// ========================================
+// PRESTIGE MARKETAPP AUTO IMPORT
+// ========================================
 
+const MARKETAPP_CATEGORIES = [
+  { key: "gifts", endpoint: "/v1/rent/gifts/" },
+  { key: "numbers", endpoint: "/v1/rent/numbers/" },
+  { key: "usernames", endpoint: "/v1/rent/usernames/" }
+];
+
+async function ensureMarketAppTables(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS marketapp_imports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      listing_id INTEGER NOT NULL,
+      source_price_raw TEXT,
+      source_price_ton REAL,
+      raw_json TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      last_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(category, external_id)
+    )
+  `).run();
+
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS marketapp_sync_state (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    )
+  `).run();
+}
+
+function marketItemId(item) {
+  return String(
+    item.nft_address ||
+    item.address ||
+    item.username ||
+    item.phone_number ||
+    item.number ||
+    item.id ||
+    ""
+  ).trim();
+}
+
+function marketImage(item) {
+  const candidates = [
+    item.image_url,
+    item.image,
+    item.photo_url,
+    item.preview_url,
+    item.thumbnail_url,
+    item.media?.url
+  ];
+
+  for (const value of candidates) {
+    try {
+      const parsed = new URL(String(value || ""));
+      if (parsed.protocol === "https:") return parsed.href;
+    } catch {}
+  }
+
+  return "";
+}
+
+async function syncMarketAppBatch(env) {
+  if (!env.MARKETAPP_API_TOKEN) {
+    return {
+      ok: false,
+      error: "MARKETAPP_API_TOKEN is missing"
+    };
+  }
+
+  await ensureMarketAppTables(env);
+
+  const last = await env.DB.prepare(`
+    SELECT value
+    FROM marketapp_sync_state
+    WHERE key = 'last_category'
+  `).first();
+
+  const previousIndex = MARKETAPP_CATEGORIES.findIndex(
+    item => item.key === last?.value
+  );
+
+  const category = MARKETAPP_CATEGORIES[
+    (previousIndex + 1) % MARKETAPP_CATEGORIES.length
+  ];
+
+  const cursorRow = await env.DB.prepare(`
+    SELECT value
+    FROM marketapp_sync_state
+    WHERE key = ?
+  `).bind(`cursor_${category.key}`).first();
+
+  const apiUrl = new URL(
+    `https://api.marketapp.org${category.endpoint}`
+  );
+
+  apiUrl.searchParams.set("limit", "40");
+  apiUrl.searchParams.set("include_sellable", "false");
+
+  if (cursorRow?.value) {
+    apiUrl.searchParams.set("cursor", cursorRow.value);
+  }
+
+  const apiResponse = await fetch(apiUrl.toString(), {
+    headers: {
+      Authorization: env.MARKETAPP_API_TOKEN,
+      Accept: "application/json"
+    }
+  });
+
+  const payload = await apiResponse.json();
+
+  if (!apiResponse.ok) {
+    return {
+      ok: false,
+      category: category.key,
+      status: apiResponse.status,
+      error: payload?.detail || "MarketApp API error"
+    };
+  }
+
+  const items = Array.isArray(payload.items)
+    ? payload.items
+    : [];
+
+  let imported = 0;
+  let duplicates = 0;
+
+  for (const item of items) {
+    const externalId = marketItemId(item);
+    if (!externalId) continue;
+
+    const existing = await env.DB.prepare(`
+      SELECT id
+      FROM marketapp_imports
+      WHERE category = ? AND external_id = ?
+    `).bind(category.key, externalId).first();
+
+    if (existing) {
+      await env.DB.prepare(`
+        UPDATE marketapp_imports
+        SET last_seen = CURRENT_TIMESTAMP,
+            raw_json = ?
+        WHERE id = ?
+      `).bind(JSON.stringify(item), existing.id).run();
+
+      duplicates++;
+      continue;
+    }
+
+    const title = String(
+      item.nft_name ||
+      item.name ||
+      item.username ||
+      item.phone_number ||
+      item.number ||
+      `${category.key} ${externalId}`
+    ).slice(0, 180);
+
+    const sourceRaw = item.price_per_day == null
+      ? null
+      : String(item.price_per_day);
+
+    const sourceNano = sourceRaw === null
+      ? NaN
+      : Number(sourceRaw);
+
+    const sourceTon =
+      Number.isFinite(sourceNano) && sourceNano >= 0
+        ? sourceNano / 1000000000
+        : null;
+
+    const description = [
+      "Импортировано из MarketApp.",
+      item.owner ? `Владелец: ${item.owner}` : "",
+      sourceTon !== null
+        ? `Цена источника: ${sourceTon} TON/день.`
+        : "Цена источника не указана.",
+      "Перед публикацией необходимо установить цены USDT и RUB."
+    ].filter(Boolean).join("\n");
+
+    const listingResult = await env.DB.prepare(`
+      INSERT INTO listings (
+        title,
+        description,
+        category,
+        image_url,
+        price,
+        status,
+        created_by
+      )
+      VALUES (?, ?, ?, ?, 0, 'PENDING', 'marketapp')
+    `).bind(
+      title,
+      description,
+      category.key,
+      marketImage(item)
+    ).run();
+
+    const listingId = Number(listingResult.meta.last_row_id);
+
+    await env.DB.prepare(`
+      INSERT INTO marketapp_imports (
+        category,
+        external_id,
+        listing_id,
+        source_price_raw,
+        source_price_ton,
+        raw_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      category.key,
+      externalId,
+      listingId,
+      sourceRaw,
+      sourceTon,
+      JSON.stringify(item)
+    ).run();
+
+    imported++;
+  }
+
+  await env.DB.prepare(`
+    INSERT INTO marketapp_sync_state (key, value)
+    VALUES ('last_category', ?)
+    ON CONFLICT(key)
+    DO UPDATE SET value = excluded.value
+  `).bind(category.key).run();
+
+  await env.DB.prepare(`
+    INSERT INTO marketapp_sync_state (key, value)
+    VALUES (?, ?)
+    ON CONFLICT(key)
+    DO UPDATE SET value = excluded.value
+  `).bind(
+    `cursor_${category.key}`,
+    payload.cursor || ""
+  ).run();
+
+  return {
+    ok: true,
+    category: category.key,
+    received: items.length,
+    imported,
+    duplicates,
+    has_more: Boolean(payload.cursor)
+  };
+}
 // MAIN WORKER
 
 export default {
