@@ -790,11 +790,12 @@ if (path === "/api/marketapp/inspect" && method === "GET") {
           : [];
 
       return {
-        status: res.status,
-item_count: items.length,
-first_item: items[0] || null,
-items: items.slice(0, 30)
-      };
+  status: res.status,
+  item_count: items.length,
+  first_item: items[0] || null,
+  next_cursor: payload?.cursor || null,
+  items: items.slice(0, 30)
+};
     } catch (error) {
       return { error: String(error?.message || error) };
     }
