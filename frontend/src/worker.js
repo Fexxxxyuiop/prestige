@@ -311,6 +311,39 @@ async function getOrCreateUser(env, telegramUser) {
     firstName
   };
 }
+// TELEGRAM STARS ORDERS
+
+async function ensureStarsOrdersTable(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS stars_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_telegram_id TEXT NOT NULL,
+      username TEXT,
+      first_name TEXT,
+      stars_amount INTEGER NOT NULL,
+      price_usd REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT
+    )
+  `).run();
+}
+
+const STARS_PACKAGES = {
+  50: 1.10,
+  75: 1.50,
+  100: 2.00,
+  150: 2.75,
+  250: 4.10,
+  350: 5.75,
+  500: 8.00,
+  750: 11.75,
+  1000: 17.00,
+  1500: 23.00,
+  2500: 40.00,
+  5000: 85.00,
+  10000: 170.00
+};
 
 // TELEGRAM NOTIFICATIONS
 
@@ -576,6 +609,130 @@ export default {
           orders: result.results || []
         }, 200, cors);
       }
+      
+async function ensureStarsPricesTable(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS stars_prices (
+      stars_amount INTEGER PRIMARY KEY,
+      price_usd REAL NOT NULL
+    )
+  `).run();
+
+  for (const [amount, price] of Object.entries(STARS_PACKAGES)) {
+    await env.DB.prepare(`
+      INSERT OR IGNORE INTO stars_prices (stars_amount, price_usd)
+      VALUES (?, ?)
+    `).bind(Number(amount), price).run();
+  }
+}
+
+      
+// TELEGRAM STARS ORDER ROUTES
+      
+if (path === "/api/stars/orders" && method === "POST") {
+  
+const STARS_PACKAGES = {
+  50: 1.10,
+  75: 1.50,
+  100: 2.00,
+  150: 2.75,
+  250: 4.10,
+  350: 5.75,
+  500: 8.00,
+  750: 11.75,
+  1000: 17.00,
+  1500: 23.00,
+  2500: 40.00,
+  5000: 85.00,
+  10000: 170.00
+};
+
+  const telegramUser = await verifyTelegram(
+    request.headers.get("X-Telegram-Init-Data"),
+    env.BOT_TOKEN
+  );
+
+  if (!telegramUser?.id) {
+    return response({ error: "Telegram authorization required" }, 401, cors);
+  }
+
+  await ensureStarsOrdersTable(env);
+
+  const body = await request.json();
+const starsAmount = Number(body.stars_amount);
+
+await ensureStarsPricesTable(env);
+
+const priceRow = await env.DB.prepare(`
+  SELECT price_usd
+  FROM stars_prices
+  WHERE stars_amount = ?
+`).bind(starsAmount).first();
+
+const price = priceRow ? Number(priceRow.price_usd) : null;
+
+  if (!price) {
+    return response({ error: "Invalid Stars package" }, 400, cors);
+  }
+
+  const result = await env.DB.prepare(`
+    INSERT INTO stars_orders (
+      user_telegram_id, username, first_name, stars_amount, price_usd
+    ) VALUES (?, ?, ?, ?, ?)
+  `).bind(
+    String(telegramUser.id),
+    telegramUser.username || null,
+    telegramUser.first_name || null,
+    starsAmount,
+    price
+  ).run();
+
+  const orderId = result.meta.last_row_id;
+  const admins = (env.ADMIN_IDS || "")
+    .split(",")
+    .map(id => id.trim())
+    .filter(Boolean);
+
+  const notification =
+    `НОВАЯ ЗАЯВКА НА STARS №${orderId}\n\n` +
+    `Пакет: ${starsAmount} Stars\n` +
+    `Цена: $${price.toFixed(2)}\n` +
+    `Имя: ${escapeText(telegramUser.first_name || "не указано")}\n` +
+    `Username: @${escapeText(telegramUser.username || "не указан")}\n` +
+    `Telegram ID: ${telegramUser.id}`;
+
+  for (const adminId of admins) {
+    await sendTelegramMessage(env, adminId, notification);
+  }
+
+  return response({
+    ok: true,
+    order_id: orderId,
+    stars_amount: starsAmount,
+    price_usd: price
+  }, 201, cors);
+}
+
+if (path === "/api/stars/orders" && method === "GET") {
+  const telegramUser = await verifyTelegram(
+    request.headers.get("X-Telegram-Init-Data"),
+    env.BOT_TOKEN
+  );
+
+  if (!telegramUser?.id) {
+    return response({ error: "Telegram authorization required" }, 401, cors);
+  }
+
+  await ensureStarsOrdersTable(env);
+
+  const result = await env.DB.prepare(`
+    SELECT * FROM stars_orders
+    WHERE user_telegram_id = ?
+    ORDER BY id DESC
+  `).bind(String(telegramUser.id)).all();
+
+  return response({ orders: result.results || [] }, 200, cors);
+}
 
       // ADMIN ROUTES
 
@@ -953,6 +1110,124 @@ export default {
             hidden: Boolean(linkedOrder)
           }, 200, cors);
         }
+        // ADMIN STARS PRICES
+
+if (path === "/api/admin/stars-prices" && method === "GET") {
+  await ensureStarsPricesTable(env);
+
+  const result = await env.DB.prepare(`
+    SELECT stars_amount, price_usd
+    FROM stars_prices
+    ORDER BY stars_amount ASC
+  `).all();
+
+  return response({ prices: result.results || [] }, 200, cors);
+}
+
+if (path === "/api/admin/stars-prices" && method === "POST") {
+  await ensureStarsPricesTable(env);
+
+  const body = await request.json();
+  const amount = Number(body.stars_amount);
+  const price = Number(body.price_usd);
+
+  if (
+    !Object.prototype.hasOwnProperty.call(STARS_PACKAGES, amount) ||
+    !Number.isFinite(price) ||
+    price <= 0 ||
+    price > 100000
+  ) {
+    return response({ error: "Invalid price data" }, 400, cors);
+  }
+
+  await env.DB.prepare(`
+    UPDATE stars_prices
+    SET price_usd = ?
+    WHERE stars_amount = ?
+  `).bind(price, amount).run();
+
+  await audit(env, admin.id, "stars_price_update", `${amount}:${price}`);
+
+  return response({ ok: true, stars_amount: amount, price_usd: price }, 200, cors);
+}
+        
+// ADMIN STARS ORDERS
+
+if (path === "/api/admin/stars-orders" && method === "GET") {
+  await ensureStarsOrdersTable(env);
+
+  const view = url.searchParams.get("view") || "pending";
+
+  let query = `
+    SELECT * FROM stars_orders
+    WHERE status = 'PENDING'
+    ORDER BY id DESC
+  `;
+
+  if (view === "history") {
+    query = `
+      SELECT * FROM stars_orders
+      WHERE status IN ('COMPLETED', 'REJECTED')
+      ORDER BY id DESC
+    `;
+  } else if (view === "active") {
+    query = `
+      SELECT * FROM stars_orders
+      WHERE status = 'ACCEPTED'
+      ORDER BY id DESC
+    `;
+  }
+
+  const result = await env.DB.prepare(query).all();
+
+  return response({
+    orders: result.results || []
+  }, 200, cors);
+}
+
+const starsOrderMatch = path.match(/^\/api\/admin\/stars-orders\/(\d+)$/);
+
+if (starsOrderMatch && method === "PATCH") {
+  await ensureStarsOrdersTable(env);
+
+  const id = Number(starsOrderMatch[1]);
+  const body = await request.json();
+  const status = String(body.status || "").toUpperCase();
+
+  if (!["ACCEPTED", "REJECTED", "COMPLETED"].includes(status)) {
+    return response({ error: "Invalid status" }, 400, cors);
+  }
+
+  const order = await env.DB.prepare(`
+    SELECT * FROM stars_orders WHERE id = ?
+  `).bind(id).first();
+
+  if (!order) {
+    return response({ error: "Stars order not found" }, 404, cors);
+  }
+
+  await env.DB.prepare(`
+    UPDATE stars_orders
+    SET status = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(status, id).run();
+
+  const messages = {
+    ACCEPTED: "Ваша заявка на Telegram Stars принята администратором.",
+    REJECTED: "Ваша заявка на Telegram Stars отклонена администратором.",
+    COMPLETED: "Ваша заявка на Telegram Stars отмечена как выполненная."
+  };
+
+  await sendTelegramMessage(
+    env,
+    order.user_telegram_id,
+    `Заявка №${id}\n${messages[status]}`
+  );
+
+  await audit(env, admin.id, "stars_order_status", `${id}:${status}`);
+
+  return response({ ok: true, order_id: id, status }, 200, cors);
+}
 
         return response({
           error: "Admin route not found"
