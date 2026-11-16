@@ -1,5 +1,4 @@
-
-const allowedOrigins = [
+ const allowedOrigins = [
   "https://fexxxxyuiop.github.io",
   "https://web.telegram.org",
   "https://t.me"
@@ -846,6 +845,64 @@ if (path === "/api/marketapp/inspect" && method === "GET") {
           return response({
             error: "Admin access denied"
           }, 403, cors);
+        }
+
+        
+        // MARKETAPP SAFE TEST
+        if (
+          path === "/api/admin/marketapp/sample" &&
+          method === "GET"
+        ) {
+          const token = env.MARKETAPP_API_TOKEN;
+
+          if (!token) {
+            return response({
+              error: "MARKETAPP_API_TOKEN secret is missing"
+            }, 500, cors);
+          }
+
+          const apiUrl = new URL(
+            "https://api.marketapp.org/v1/rent/gifts/"
+          );
+
+          apiUrl.searchParams.set("limit", "100");
+          apiUrl.searchParams.set("include_sellable", "false");
+
+          const apiResponse = await fetch(apiUrl.toString(), {
+            headers: {
+              "Authorization": token,
+              "Accept": "application/json"
+            }
+          });
+
+          const payload = await apiResponse.json();
+
+          if (!apiResponse.ok) {
+            return response({
+              error: "MarketApp API error",
+              status: apiResponse.status
+            }, 502, cors);
+          }
+
+          const items = Array.isArray(payload.items)
+            ? payload.items
+            : [];
+
+          const target = items.find(item =>
+            String(item.nft_name || "").includes("Resistance Dog #5411")
+          );
+
+          const sample = target || items[0] || null;
+
+          return response({
+            ok: true,
+            total_on_page: items.length,
+            target_found: Boolean(target),
+            available_fields: sample
+              ? Object.keys(sample)
+              : [],
+            sample
+          }, 200, cors);
         }
 
   
