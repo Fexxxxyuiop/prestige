@@ -733,6 +733,21 @@ if (path === "/api/stars/orders" && method === "GET") {
 
   return response({ orders: result.results || [] }, 200, cors);
 }
+      // PUBLIC STARS PRICES
+
+if (path === "/api/stars/prices" && method === "GET") {
+  await ensureStarsPricesTable(env);
+
+  const result = await env.DB.prepare(`
+    SELECT stars_amount, price_usd
+    FROM stars_prices
+    ORDER BY stars_amount ASC
+  `).all();
+
+  return response({
+    prices: result.results || []
+  }, 200, cors);
+}
 
       // ADMIN ROUTES
 
